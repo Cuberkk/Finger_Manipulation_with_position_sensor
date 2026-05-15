@@ -4,7 +4,7 @@ import tf2_ros
 import numpy as np
 from rclpy.node import Node
 from std_msgs.msg import Float64MultiArray
-from LabjackReader import LabjackATIReader
+from utils.LabjackReader import LabjackATIReader
 from scipy.spatial.transform import Rotation as R
 
 class LabjackATINode(Node):

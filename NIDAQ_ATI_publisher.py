@@ -8,7 +8,7 @@ from scipy.spatial.transform import Rotation as R
 
 # Make sure this filename matches the file that contains your NIDAQReaderDual class.
 # Example: if your reader file is named NIDAQReader.py, keep this line.
-from NIDAQReaderDual import NIDAQReaderDual
+from utils.NIDAQReaderDual import NIDAQReaderDual
 
 
 class NIDAQATINode(Node):
