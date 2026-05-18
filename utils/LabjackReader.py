@@ -18,7 +18,7 @@ class LabjackATIReader:
       [Fx,Fy,Fz,Tx,Ty,Tz]
     """
 
-    def __init__(self, cal_path, aq_rate=60, bias_time=30, bias_switch = True):
+    def __init__(self, cal_path, aq_rate=60, bias_frames=30, bias_switch = True):
         # Guard: make failure explicit if LJM isn't installed/available
         if ljm is None:
             raise RuntimeError("labjack.ljm not available. Install LabJack LJM.")
@@ -53,9 +53,21 @@ class LabjackATIReader:
         self.labjack_bias = np.zeros(self.sensor_len,)  # Placeholder for bias; can be set by compute_bias()
         if bias_switch:
             print("Computing bias on initialization...")
-            self.compute_bias(time_period=bias_time)  # Automatically compute bias on init; adjust time_period as needed
+            self.compute_bias(total_frames=bias_frames)  # Automatically compute bias on init; adjust time_period as needed
         else:
             pass
+        
+        self.stream_start = False
+        self.channel_address = ljm.namesToAddresses(self.num_channels, self.channels)[0]
+        try:
+            ljm.eStreamStop(self.handle)
+        except ljm.LJMError as e:
+            if e.errorCode != 2620:
+                raise 
+        self.scans_per_read = 1
+        actual_rate = ljm.eStreamStart(self.handle, self.scans_per_read, self.num_channels, self.channel_address, self.scan_rate)
+        self.stream_start = True
+        print(f"Stream started at {actual_rate:.2f} Hz\n")
 
 
     def _read_cal(self, path):
@@ -74,7 +86,29 @@ class LabjackATIReader:
             rows.append(vals)
         return np.array(rows).reshape(6, 6)
     
-    def read(self):
+    def stream_read(self):
+        # data = ljm.eStreamRead(self.handle)
+        data = ljm.eStreamRead(self.handle)
+        # Read the last scan of voltages for the configured channels
+        # voltages = np.array(data[0]).reshape((self.num_channels, self.scans_per_read))
+        voltages = np.array(data[0]).reshape(( self.num_channels, self.scans_per_read))
+        # print(f"Latest voltages: {latest_voltages.shape}")
+
+        # Calculate forces and torques
+        forces_torques = np.dot(self.calibration_matrix, voltages)
+
+        # Assign forces and torques
+        FT_lis = forces_torques.flatten()
+            
+        if abs(FT_lis[0]) >= 24 or abs(FT_lis[1]) >= 24 or abs(FT_lis[2]) >= 24:
+            print("Warning: Force approaching Limit!")
+        elif abs(FT_lis[3]) >= 240 or abs(FT_lis[4]) >= 240 or abs(FT_lis[5]) >= 240:
+            print("Warning: Torque approaching Limit!")
+            
+        FT_biased = FT_lis - self.labjack_bias
+        return FT_biased
+    
+    def straight_read(self):
         # data = ljm.eStreamRead(self.handle)
         data = ljm.eReadNames(self.handle, self.num_channels, self.channels)
         # Read the last scan of voltages for the configured channels
@@ -95,13 +129,12 @@ class LabjackATIReader:
             
         FT_biased = FT_lis - self.labjack_bias
         return FT_biased
-    
-    def compute_bias(self, time_period = 30):
-        total_frames = int(self.scan_rate * time_period)
-        print(f"Computing bias over {time_period} seconds ({total_frames} frames at {self.scan_rate} Hz)...")
+
+    def compute_bias(self, total_frames = 30):
+        print(f"Computing bias over {total_frames} frames")
         itr = 0
         while itr < total_frames:
-            FT_arr = self.read()
+            FT_arr = self.straight_read()
             if np.all(FT_arr == 0):
                 print("No samples available during bias computation, skipping this frame.")
                 continue
@@ -126,10 +159,10 @@ class LabjackATIReader:
             pass
 
 if __name__ == "__main__":
-    lj = LabjackATIReader("calibration_files/FT44297.cal", aq_rate=60, bias_time=5)
+    lj = LabjackATIReader("calibration_files/FT44297.cal", aq_rate=60, bias_frames=5)
     try:
         while True:
-            FT_lis = lj.read()
+            FT_lis = lj.stream_read()
             print(f"Labjack Readings: Fx: {FT_lis[0]:.2f}, Fy: {FT_lis[1]:.2f}, Fz: {FT_lis[2]:.2f}, Tx: {FT_lis[3]:.2f}, Ty: {FT_lis[4]:.2f}, Tz: {FT_lis[5]:.2f}")
             time.sleep(1 / (lj.scan_rate*2))
     except KeyboardInterrupt:
