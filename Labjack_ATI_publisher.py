@@ -130,6 +130,16 @@ class LabjackATINode(Node):
             "LabJack ATI Sensor 3 + Polhemus Finger 3 Position Node Initialized"
         )
 
+        # ─────────────────────────────────────────────────────────────────────
+        # Gravity compensation settings
+        # ─────────────────────────────────────────────────────────────────────
+
+        self.gravity_m_s2 = 9.80665
+
+        # Set this to the effective mass assigned to sensor/finger 3.
+        # Do NOT leave this at 0.0 during real data collection.
+        self.mass_s3_kg = 0.0
+
     def timer_callback(self):
         """
         Main loop.
@@ -268,13 +278,40 @@ class LabjackATINode(Node):
             force_s3_finger3 = rot_finger3_force_s3 @ force_s3
 
             # ─────────────────────────────────────────────────────────────────
+            # Gravity compensation
+            #
+            # Polhemus base z-axis points down, so:
+            #   F_g,B = [0, 0, m*g]
+            #
+            # Rotate gravity:
+            #   base frame -> object frame -> finger 3 position sensor frame
+            #
+            # Then subtract it from force_s3_finger3.
+            # ─────────────────────────────────────────────────────────────────
+
+            gravity_base_s3 = np.array([
+                0.0,
+                0.0,
+                self.mass_s3_kg * self.gravity_m_s2
+            ], dtype=np.float64)
+
+            # Base frame -> object frame
+            gravity_obj_s3 = rot_base_obj.T @ gravity_base_s3
+
+            # Object frame -> finger 3 position sensor frame
+            gravity_s3_finger3 = rot_obj_finger3.T @ gravity_obj_s3
+
+            # Final gravity-compensated force
+            force_s3_finger3_gc = force_s3_finger3 - gravity_s3_finger3
+
+            # ─────────────────────────────────────────────────────────────────
             # Publish data.
             # ─────────────────────────────────────────────────────────────────
 
             data_arr = np.concatenate([
 
                 # Force sensor 3 in finger 3 position sensor frame
-                force_s3_finger3.astype(np.float64),
+                force_s3_finger3_gc.astype(np.float64),
 
                 # # Finger 3 position sensor location expressed in object frame
                 # pos_obj_finger3.astype(np.float64),

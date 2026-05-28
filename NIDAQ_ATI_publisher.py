@@ -21,11 +21,8 @@ class NIDAQATINode(Node):
 
     Polhemus Viper position sensors:
         sensor4 = object position sensor
-        finger1_position_sensor = finger 1 position sensor
-        finger2_position_sensor = finger 2 position sensor
-
-    Finger 3 is NOT included in this file.
-    Finger 3 should be handled in the separate LabJack file with force sensor 3.
+        sensor1 = finger 1 position sensor frame
+        sensor2 = finger 2 position sensor frame
 
     Main rotations computed:
 
@@ -41,27 +38,20 @@ class NIDAQATINode(Node):
 
             R_fingerpos_force = R_object_fingerpos.T @ R_object_force
 
-    Reader output from NIDAQReaderDual.read():
+    Reader output from NIDAQReaderDual.stream_read():
         Sensor 1: indices 0:6  -> [Fx1, Fy1, Fz1, Tx1, Ty1, Tz1]
         Sensor 2: indices 6:12 -> [Fx2, Fy2, Fz2, Tx2, Ty2, Tz2]
 
     Published Float64MultiArray:
 
         [
-            Fx1_obj, Fy1_obj, Fz1_obj,
-            Fx2_obj, Fy2_obj, Fz2_obj,
-
             Fx1_fingerpos1, Fy1_fingerpos1, Fz1_fingerpos1,
             Fx2_fingerpos2, Fy2_fingerpos2, Fz2_fingerpos2,
-
-            finger1_x_obj, finger1_y_obj, finger1_z_obj,
-            finger2_x_obj, finger2_y_obj, finger2_z_obj,
-
             timestamp_sec
         ]
 
     Topic:
-        nidaq_ati_data
+        ERIE_Manipulation/force/finger1_2
     """
 
     def __init__(self):
@@ -101,21 +91,33 @@ class NIDAQATINode(Node):
         self.object_position_frame = 'sensor4'
 
         # Individual finger position sensor frames.
-        # Rename these strings if your TF frames have different names.
-        self.finger1_position_frame = 'finger1_position_sensor'
-        self.finger2_position_frame = 'finger2_position_sensor'
+        # These now match the Polhemus TF frame names directly.
+        self.finger1_position_frame = 'sensor1'
+        self.finger2_position_frame = 'sensor2'
 
         # Physical sensor spacing around the object.
-        # Changed from +/-160 degrees to 120-degree spacing.
-        #
-        # sensor1 is treated as the reference force sensor.
-        # sensor2 is placed 120 degrees around the object from sensor1.
-        #
-        # If your physical layout is reversed, change sensor2 to -120.0.
+        # sensor1 uses -120 degrees.
+        # sensor2 uses +120 degrees.
         self.sensor_angles_deg = {
-            'sensor1': 0.0,
+            'sensor1': -120.0,
             'sensor2': 120.0,
         }
+
+        # Extra ATI sensor z-axis alignment rotation.
+        # This is Rz(48 degrees), same idea as the LabJack ATI publisher.
+        z_rot_48 = 48.0
+        z_rot_rad = np.deg2rad(z_rot_48)
+        self.sensor_rot_z_48 = np.array([
+            [np.cos(z_rot_rad), -np.sin(z_rot_rad), 0.0],
+            [np.sin(z_rot_rad),  np.cos(z_rot_rad), 0.0],
+            [0.0,                0.0,               1.0]
+        ])
+
+        # Precompute manual ATI force-sensor-to-object rotations.
+        # sensor1: R_object_force1 = Rz(-120) @ rot_base @ Rz(48)
+        # sensor2: R_object_force2 = Rz(+120) @ rot_base @ Rz(48)
+        self.rot_obj_force_s1 = self.ati_force_to_object_rotation('sensor1')
+        self.rot_obj_force_s2 = self.ati_force_to_object_rotation('sensor2')
 
         # Maximum allowed TF transform age in seconds.
         self.trans_delay = 1.5
@@ -139,7 +141,7 @@ class NIDAQATINode(Node):
 
         self.nidaq_pub = self.create_publisher(
             Float64MultiArray,
-            'nidaq_ati_data',
+            'ERIE_Manipulation/force/finger1_2',
             1
         )
 
@@ -162,17 +164,28 @@ class NIDAQATINode(Node):
             "NI-DAQ ATI + Polhemus Finger Position Node Initialized"
         )
 
+        # ─────────────────────────────────────────────────────────────────────
+        # Gravity compensation settings
+        # ─────────────────────────────────────────────────────────────────────
+
+        self.gravity_m_s2 = 9.80665
+
+        # Set these to the effective mass assigned to each sensor/finger.
+        # Do NOT leave these at 0.0 during real data collection.
+        self.mass_s1_kg = 0.0
+        self.mass_s2_kg = 0.0
+
     def timer_callback(self):
         """
         Main loop.
 
-        1. Read force vectors from NI-DAQ ATI sensors 1 and 2.
+        1. Stream force vectors from NI-DAQ ATI sensors 1 and 2.
         2. Read Polhemus Viper transforms from TF.
         3. Compute:
-              force sensor -> object frame
-              finger position sensor -> object frame
-              force sensor -> finger position sensor frame
-        4. Publish forces and finger positions.
+              force sensor 1 -> finger 1 position sensor frame
+              force sensor 2 -> finger 2 position sensor frame
+        4. Publish:
+              force_s1_finger1, force_s2_finger2, timestamp
         """
 
         self.total_itr += 1
@@ -180,7 +193,7 @@ class NIDAQATINode(Node):
         # Reader returns 12 values:
         # [Fx1,Fy1,Fz1,Tx1,Ty1,Tz1,
         #  Fx2,Fy2,Fz2,Tx2,Ty2,Tz2]
-        ft_arr = self.nidaq_reader.read()
+        ft_arr = self.nidaq_reader.stream_read()
 
         # Extract force vectors only.
         force_s1 = np.asarray(ft_arr[0:3], dtype=np.float64)
@@ -203,9 +216,13 @@ class NIDAQATINode(Node):
             # gives:
             #       sensor4/object frame -> polhemus_base frame
             #
-            # lookup_transform(polhemus_base, finger1_position_sensor, ...)
+            # lookup_transform(polhemus_base, sensor1, ...)
             # gives:
-            #       finger1 position frame -> polhemus_base frame
+            #       finger 1 position frame -> polhemus_base frame
+            #
+            # lookup_transform(polhemus_base, sensor2, ...)
+            # gives:
+            #       finger 2 position frame -> polhemus_base frame
             # ─────────────────────────────────────────────────────────────────
 
             t_base_obj = self.tf_buffer.lookup_transform(
@@ -248,11 +265,6 @@ class NIDAQATINode(Node):
             rot_base_finger1 = self.transform_rot_generator(t_base_finger1)
             rot_base_finger2 = self.transform_rot_generator(t_base_finger2)
 
-            # Extract translations in polhemus_base frame.
-            pos_base_obj = self.transform_translation_generator(t_base_obj)
-            pos_base_finger1 = self.transform_translation_generator(t_base_finger1)
-            pos_base_finger2 = self.transform_translation_generator(t_base_finger2)
-
             # ─────────────────────────────────────────────────────────────────
             # Compute finger position sensor rotations into object frame.
             #
@@ -274,75 +286,72 @@ class NIDAQATINode(Node):
             rot_obj_finger2 = rot_base_obj.T @ rot_base_finger2
 
             # ─────────────────────────────────────────────────────────────────
-            # Compute finger position sensor positions in object frame.
-            #
-            # Given positions in polhemus_base:
-            #       p_base_obj
-            #       p_base_finger
-            #
-            # Position of finger sensor relative to object, expressed in object:
-            #
-            #       p_object_finger = R_base_obj.T @ (p_base_finger - p_base_obj)
-            # ─────────────────────────────────────────────────────────────────
-
-            pos_obj_finger1 = rot_base_obj.T @ (pos_base_finger1 - pos_base_obj)
-            pos_obj_finger2 = rot_base_obj.T @ (pos_base_finger2 - pos_base_obj)
-
-            # ─────────────────────────────────────────────────────────────────
-            # Compute ATI force sensor rotations into object frame.
-            #
-            # These are your manual ATI-to-object rotations.
-            # They use 120 degrees instead of 160 degrees.
-            # ─────────────────────────────────────────────────────────────────
-
-            rot_obj_force_s1 = self.ati_force_to_object_rotation('sensor1')
-            rot_obj_force_s2 = self.ati_force_to_object_rotation('sensor2')
-
-            # Rotate force vectors into the object frame.
-            force_s1_obj = rot_obj_force_s1 @ force_s1
-            force_s2_obj = rot_obj_force_s2 @ force_s2
-
-            # ─────────────────────────────────────────────────────────────────
             # Compute ATI force sensor rotations into individual finger
             # position sensor frames.
             #
-            # We have:
-            #       R_object_force      = force frame -> object frame
-            #       R_object_fingerpos  = finger position frame -> object frame
+            # sensor1:
+            #       R_object_force1 = Rz(-120) @ rot_base @ Rz(48)
+            #       R_finger1_force1 = R_object_finger1.T @ R_object_force1
             #
-            # We want:
-            #       R_fingerpos_force   = force frame -> finger position frame
-            #
-            # Since:
-            #       R_fingerpos_object = R_object_fingerpos.T
-            #
-            # Therefore:
-            #       R_fingerpos_force = R_object_fingerpos.T @ R_object_force
+            # sensor2:
+            #       R_object_force2 = Rz(+120) @ rot_base @ Rz(48)
+            #       R_finger2_force2 = R_object_finger2.T @ R_object_force2
             # ─────────────────────────────────────────────────────────────────
 
-            rot_finger1_force_s1 = rot_obj_finger1.T @ rot_obj_force_s1
-            rot_finger2_force_s2 = rot_obj_finger2.T @ rot_obj_force_s2
+            rot_finger1_force_s1 = rot_obj_finger1.T @ self.rot_obj_force_s1
+            rot_finger2_force_s2 = rot_obj_finger2.T @ self.rot_obj_force_s2
 
             # Rotate force vectors into matching finger position sensor frames.
             force_s1_finger1 = rot_finger1_force_s1 @ force_s1
             force_s2_finger2 = rot_finger2_force_s2 @ force_s2
 
             # ─────────────────────────────────────────────────────────────────
+            # Gravity compensation
+            #
+            # Polhemus base z-axis points down, so:
+            #   F_g,B = [0, 0, m*g]
+            #
+            # Rotate gravity:
+            #   base frame -> object frame -> finger position sensor frame
+            #
+            # Then subtract it from the measured force already expressed in
+            # the finger position sensor frame.
+            # ─────────────────────────────────────────────────────────────────
+
+            gravity_base_s1 = np.array([
+                0.0,
+                0.0,
+                self.mass_s1_kg * self.gravity_m_s2
+            ], dtype=np.float64)
+
+            gravity_base_s2 = np.array([
+                0.0,
+                0.0,
+                self.mass_s2_kg * self.gravity_m_s2
+            ], dtype=np.float64)
+
+            # Base frame -> object frame
+            gravity_obj_s1 = rot_base_obj.T @ gravity_base_s1
+            gravity_obj_s2 = rot_base_obj.T @ gravity_base_s2
+
+            # Object frame -> finger position sensor frame
+            gravity_s1_finger1 = rot_obj_finger1.T @ gravity_obj_s1
+            gravity_s2_finger2 = rot_obj_finger2.T @ gravity_obj_s2
+
+            # Final gravity-compensated forces
+            force_s1_finger1_gc = force_s1_finger1 - gravity_s1_finger1
+            force_s2_finger2_gc = force_s2_finger2 - gravity_s2_finger2
+
+            # ─────────────────────────────────────────────────────────────────
             # Publish data.
             # ─────────────────────────────────────────────────────────────────
 
             data_arr = np.concatenate([
-                # Forces in object frame
-                force_s1_obj.astype(np.float64),
-                force_s2_obj.astype(np.float64),
+                # Force sensor 1 in finger 1 position sensor frame
+                force_s1_finger1_gc.astype(np.float64),
 
-                # Forces in matching finger position sensor frames
-                force_s1_finger1.astype(np.float64),
-                force_s2_finger2.astype(np.float64),
-
-                # Finger position sensor locations expressed in object frame
-                pos_obj_finger1.astype(np.float64),
-                pos_obj_finger2.astype(np.float64),
+                # Force sensor 2 in finger 2 position sensor frame
+                force_s2_finger2_gc.astype(np.float64),
 
                 # Timestamp
                 np.array([timestamp_sec], dtype=np.float64)
@@ -370,7 +379,10 @@ class NIDAQATINode(Node):
 
             force sensor frame -> object frame
 
-        The sensors are now treated as being spaced 120 degrees apart.
+        For this file:
+
+            sensor1: R_object_force1 = Rz(-120) @ rot_base @ Rz(48)
+            sensor2: R_object_force2 = Rz(+120) @ rot_base @ Rz(48)
         """
 
         theta_deg = self.sensor_angles_deg[sensor_name]
@@ -397,7 +409,7 @@ class NIDAQATINode(Node):
             [-1.0, 0.0, 0.0]
         ])
 
-        rot_obj_force = rot_z @ rot_base
+        rot_obj_force = rot_z @ rot_base @ self.sensor_rot_z_48
 
         return rot_obj_force
 
