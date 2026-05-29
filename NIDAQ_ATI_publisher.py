@@ -100,7 +100,7 @@ class NIDAQATINode(Node):
         # sensor2 uses +120 degrees.
         self.sensor_angles_deg = {
             'sensor1': -120.0,
-            'sensor2': 120.0,
+            'sensor2': 0.0,
         }
 
         # Extra ATI sensor z-axis alignment rotation.

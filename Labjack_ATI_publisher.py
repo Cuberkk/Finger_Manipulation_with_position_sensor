@@ -85,7 +85,7 @@ class LabjackATINode(Node):
         # Sensor 3 is spaced 120 degrees around the object from the reference.
         # If your physical layout is reversed, change this to -120.0.
         self.sensor_angles_deg = {
-            'sensor3': 0.0,
+            'sensor3': 120.0,
         }
 
         # Maximum allowed TF transform age in seconds.
