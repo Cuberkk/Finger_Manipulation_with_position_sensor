@@ -234,6 +234,7 @@ class LabjackATINode(Node):
             # ─────────────────────────────────────────────────────────────────
 
             rot_finger3_obj = rot_base_finger3.T @ rot_base_obj
+            print(f"Rotation from finger 3 position sensor frame to object frame:\n{rot_finger3_obj}")
 
             # ─────────────────────────────────────────────────────────────────
             # Compute finger 3 position sensor location in object frame.
@@ -288,7 +289,7 @@ class LabjackATINode(Node):
             data_arr = np.concatenate([
 
                 # Force sensor 3 in finger 3 position sensor frame
-                force_s3_finger3_gc.astype(np.float64),
+                force_s3_finger3.astype(np.float64),
 
                 # # Finger 3 position sensor location expressed in object frame
                 # pos_obj_finger3.astype(np.float64),
