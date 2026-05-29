@@ -63,7 +63,7 @@ class LabjackATINode(Node):
         self.ati_reader = LabjackATIReader(
             cal_path=self.cal_path,
             aq_rate=self.publish_rate,
-            bias_frames=5,
+            bias_frames=30,
             bias_switch=True
         )
 
@@ -91,7 +91,7 @@ class LabjackATINode(Node):
         # Maximum allowed TF transform age in seconds.
         self.trans_delay = 1.5
 
-        z_rot_48 = 48.
+        z_rot_48 = -48.
         z_rot_rad = np.deg2rad(z_rot_48)
         self.sensor_rot_z_48 = np.array([
             [np.cos(z_rot_rad), -np.sin(z_rot_rad), 0.0],
@@ -216,10 +216,6 @@ class LabjackATINode(Node):
             rot_base_obj = self.transform_rot_generator(t_base_obj)
             rot_base_finger3 = self.transform_rot_generator(t_base_finger3)
 
-            # Extract translations in polhemus_base frame.
-            pos_base_obj = self.transform_translation_generator(t_base_obj)
-            pos_base_finger3 = self.transform_translation_generator(t_base_finger3)
-
             # ─────────────────────────────────────────────────────────────────
             # Compute finger 3 position sensor rotation into object frame.
             #
@@ -237,7 +233,7 @@ class LabjackATINode(Node):
             #       R_object_finger3 = R_base_obj.T @ R_base_finger3
             # ─────────────────────────────────────────────────────────────────
 
-            rot_obj_finger3 = rot_base_obj.T @ rot_base_finger3
+            rot_finger3_obj = rot_base_finger3.T @ rot_base_obj
 
             # ─────────────────────────────────────────────────────────────────
             # Compute finger 3 position sensor location in object frame.
@@ -251,31 +247,11 @@ class LabjackATINode(Node):
             #       p_object_finger3 = R_base_obj.T @ (p_base_finger3 - p_base_obj)
             # ─────────────────────────────────────────────────────────────────
 
-            pos_obj_finger3 = rot_base_obj.T @ (
-                pos_base_finger3 - pos_base_obj
-            )
-
-            # ─────────────────────────────────────────────────────────────────
-            # Compute ATI force sensor 3 rotation into finger 3 position frame.
-            #
-            # We have:
-            #       R_object_force3      = force3 frame -> object frame
-            #       R_object_finger3pos  = finger3 position frame -> object frame
-            #
-            # We want:
-            #       R_finger3pos_force3  = force3 frame -> finger3 position frame
-            #
-            # Since:
-            #       R_finger3pos_object = R_object_finger3pos.T
-            #
-            # Therefore:
-            #       R_finger3pos_force3 = R_object_finger3pos.T @ R_object_force3
-            # ─────────────────────────────────────────────────────────────────
-
-            rot_finger3_force_s3 = rot_obj_finger3.T @ self.rot_obj_force_s3
+            rot_finger3_force_s3 = rot_finger3_obj @ self.rot_obj_force_s3
 
             # Rotate force sensor 3 force vector into finger 3 position sensor frame.
             force_s3_finger3 = rot_finger3_force_s3 @ force_s3
+            print(f"Force sensor 3 in finger 3 position sensor frame: {force_s3_finger3}")
 
             # ─────────────────────────────────────────────────────────────────
             # Gravity compensation
@@ -300,10 +276,10 @@ class LabjackATINode(Node):
             gravity_obj_s3 = rot_base_obj.T @ gravity_base_s3
 
             # Object frame -> finger 3 position sensor frame
-            gravity_s3_finger3 = rot_obj_finger3.T @ gravity_obj_s3
+            gravity_s3_finger3 = rot_finger3_obj.T @ gravity_obj_s3
 
             # Final gravity-compensated force
-            force_s3_finger3_gc = force_s3_finger3 - gravity_s3_finger3
+            force_s3_finger3_gc = force_s3_finger3 
 
             # ─────────────────────────────────────────────────────────────────
             # Publish data.
