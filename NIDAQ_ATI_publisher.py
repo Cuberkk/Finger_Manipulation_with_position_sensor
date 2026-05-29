@@ -168,12 +168,12 @@ class NIDAQATINode(Node):
         # Gravity compensation settings
         # ─────────────────────────────────────────────────────────────────────
 
-        self.gravity_m_s2 = 9.80665
+        #self.gravity_m_s2 = 9.80665
 
         # Set these to the effective mass assigned to each sensor/finger.
         # Do NOT leave these at 0.0 during real data collection.
-        self.mass_s1_kg = 0.0
-        self.mass_s2_kg = 0.0
+        #self.mass_s1_kg = 0.0
+        #self.mass_s2_kg = 0.0
 
     def timer_callback(self):
         """
@@ -321,13 +321,15 @@ class NIDAQATINode(Node):
             gravity_base_s1 = np.array([
                 0.0,
                 0.0,
-                self.mass_s1_kg * self.gravity_m_s2
+                .04
+                #self.mass_s1_kg * self.gravity_m_s2
             ], dtype=np.float64)
 
             gravity_base_s2 = np.array([
                 0.0,
                 0.0,
-                self.mass_s2_kg * self.gravity_m_s2
+                .04
+               #self.mass_s2_kg * self.gravity_m_s2
             ], dtype=np.float64)
 
             # Base frame -> object frame

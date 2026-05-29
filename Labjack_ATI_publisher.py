@@ -134,11 +134,11 @@ class LabjackATINode(Node):
         # Gravity compensation settings
         # ─────────────────────────────────────────────────────────────────────
 
-        self.gravity_m_s2 = 9.80665
+        #self.gravity_m_s2 = 9.80665
 
         # Set this to the effective mass assigned to sensor/finger 3.
         # Do NOT leave this at 0.0 during real data collection.
-        self.mass_s3_kg = 0.0
+        #self.mass_s3_kg = 0.0
 
     def timer_callback(self):
         """
@@ -292,7 +292,8 @@ class LabjackATINode(Node):
             gravity_base_s3 = np.array([
                 0.0,
                 0.0,
-                self.mass_s3_kg * self.gravity_m_s2
+                .04
+                #self.mass_s3_kg * self.gravity_m_s2
             ], dtype=np.float64)
 
             # Base frame -> object frame
