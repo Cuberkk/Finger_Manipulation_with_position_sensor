@@ -139,9 +139,15 @@ class NIDAQATINode(Node):
         # ROS publisher and timer
         # ─────────────────────────────────────────────────────────────────────
 
-        self.nidaq_pub = self.create_publisher(
+        self.nidaq_pub_s1 = self.create_publisher(
             Float64MultiArray,
-            'ERIE_Manipulation/force/finger1_2',
+            'ERIE_Manipulation/force/force_s1_finger1',
+            1
+        )
+
+        self.nidaq_pub_s2 = self.create_publisher(
+            Float64MultiArray,
+            'ERIE_Manipulation/force/force_s2_finger2',
             1
         )
 
@@ -309,10 +315,15 @@ class NIDAQATINode(Node):
             # Publish data.
             # ─────────────────────────────────────────────────────────────────
 
-            data_arr = np.concatenate([
+            data_s1 = np.concatenate([
                 # Force sensor 1 in finger 1 position sensor frame
                 force_s1_finger1.astype(np.float64),
 
+                # Timestamp
+                np.array([timestamp_sec], dtype=np.float64)
+            ])
+
+            data_s2 = np.concatenate([
                 # Force sensor 2 in finger 2 position sensor frame
                 force_s2_finger2.astype(np.float64),
 
@@ -320,8 +331,11 @@ class NIDAQATINode(Node):
                 np.array([timestamp_sec], dtype=np.float64)
             ])
 
-            data_msg = Float64MultiArray(data=data_arr.flatten().tolist())
-            self.nidaq_pub.publish(data_msg)
+            msg_s1 = Float64MultiArray(data=data_s1.flatten().tolist())
+            msg_s2 = Float64MultiArray(data=data_s2.flatten().tolist())
+
+            self.nidaq_pub_s1.publish(msg_s1)
+            self.nidaq_pub_s2.publish(msg_s2)
 
         except tf2_ros.TransformException as exc:
             self.miss_itr += 1
