@@ -14,14 +14,15 @@ class RotationalError(Node):
 
         self.polhemus_base_frame = 'polhemus_base'
         self.finger_position_frame = f'sensor{sensor_number}'
+        self.object_position_frame = 'sensor4'
 
         # Maximum allowed TF transform age in seconds.
         self.trans_delay = 1.5
 
         self.rotational_gt = np.array([
-            [-1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
             [ 0.0, 1.0, 0.0],
-             [0.0, 0.0,-1.0]
+             [0.0, 0.0,1.0]
         ])
 
         # ─────────────────────────────────────────────────────────────────────
@@ -30,7 +31,7 @@ class RotationalError(Node):
 
         self.error_pub = self.create_publisher(
             Float64MultiArray,
-            f'ERIE_Manipulation/rotational_error/sensor{sensor_number}',
+            f'ERIE_Manipulation/rotational_error/object_to_sensor{sensor_number}',
             1
         )
 
@@ -58,15 +59,26 @@ class RotationalError(Node):
                 self.finger_position_frame,
                 rclpy.time.Time()
             )
+            t_base_object = self.tf_buffer.lookup_transform(
+                self.polhemus_base_frame,
+                self.object_position_frame,
+                rclpy.time.Time()
+            )
 
             # Check transform age.
             if not self.transform_is_recent(t_base_finger, now):
                 self.get_logger().warn("Transform is too old.")
                 return
+            
+            if not self.transform_is_recent(t_base_object, now):
+                self.get_logger().warn("Transform is too old.")
+                return
 
-            rot_curr = self.transform_rot_generator(t_base_finger)
-            print(f"Current rotation matrix:\n{rot_curr}")
-            err = np.trace(self.rotational_gt.T @ rot_curr) - 3
+            rot_curr_finger = self.transform_rot_generator(t_base_finger)
+            rot_curr_object = self.transform_rot_generator(t_base_object)
+            rot_curr_finger_object = rot_curr_finger.T @ rot_curr_object
+            # print(f"Current rotation matrix:\n{rot_curr_finger}")
+            err = np.trace(self.rotational_gt.T @ rot_curr_finger_object) - 3
 
             data_msg = Float64MultiArray(
                 data=np.array([err], dtype=np.float64).flatten().tolist()

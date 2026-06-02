@@ -170,20 +170,6 @@ class LabjackATINode(Node):
         try:
             now = self.get_clock().now()
 
-            # ─────────────────────────────────────────────────────────────────
-            # Look up Polhemus Viper transforms relative to polhemus_base.
-            #
-            # lookup_transform(target_frame, source_frame, time)
-            #
-            # lookup_transform(polhemus_base, sensor4, ...)
-            # gives:
-            #       sensor4/object frame -> polhemus_base frame
-            #
-            # lookup_transform(polhemus_base, finger3_position_sensor, ...)
-            # gives:
-            #       finger3 position frame -> polhemus_base frame
-            # ─────────────────────────────────────────────────────────────────
-
             t_base_obj = self.tf_buffer.lookup_transform(
                 self.polhemus_base_frame,
                 self.object_position_frame,
@@ -205,82 +191,17 @@ class LabjackATINode(Node):
                     self.handle_old_transform(name)
                     return
 
-            # ─────────────────────────────────────────────────────────────────
-            # Convert Polhemus TF transforms into rotation matrices.
-            #
-            # These rotations map:
-            #       object frame -> polhemus_base frame
-            #       finger3 position frame -> polhemus_base frame
-            # ─────────────────────────────────────────────────────────────────
-
             rot_base_obj = self.transform_rot_generator(t_base_obj)
             rot_base_finger3 = self.transform_rot_generator(t_base_finger3)
 
-            # ─────────────────────────────────────────────────────────────────
-            # Compute finger 3 position sensor rotation into object frame.
-            #
-            # Given:
-            #       R_base_obj      = object frame -> polhemus_base frame
-            #       R_base_finger3  = finger3 position frame -> polhemus_base frame
-            #
-            # We want:
-            #       R_object_finger3 = finger3 position frame -> object frame
-            #
-            # Since:
-            #       R_object_base = R_base_obj.T
-            #
-            # Therefore:
-            #       R_object_finger3 = R_base_obj.T @ R_base_finger3
-            # ─────────────────────────────────────────────────────────────────
-
             rot_finger3_obj = rot_base_finger3.T @ rot_base_obj
-            print(f"Rotation from finger 3 position sensor frame to object frame:\n{rot_finger3_obj}")
-
-            # ─────────────────────────────────────────────────────────────────
-            # Compute finger 3 position sensor location in object frame.
-            #
-            # Given:
-            #       p_base_obj
-            #       p_base_finger3
-            #
-            # Position of finger3 sensor relative to object, expressed in object:
-            #
-            #       p_object_finger3 = R_base_obj.T @ (p_base_finger3 - p_base_obj)
-            # ─────────────────────────────────────────────────────────────────
 
             rot_finger3_force_s3 = rot_finger3_obj @ self.rot_obj_force_s3
 
             # Rotate force sensor 3 force vector into finger 3 position sensor frame.
             force_s3_finger3 = rot_finger3_force_s3 @ force_s3
-            print(f"Force sensor 3 in finger 3 position sensor frame: {force_s3_finger3}")
-
-            # ─────────────────────────────────────────────────────────────────
-            # Gravity compensation
-            #
-            # Polhemus base z-axis points down, so:
-            #   F_g,B = [0, 0, m*g]
-            #
-            # Rotate gravity:
-            #   base frame -> object frame -> finger 3 position sensor frame
-            #
-            # Then subtract it from force_s3_finger3.
-            # ─────────────────────────────────────────────────────────────────
-
-            gravity_base_s3 = np.array([
-                0.0,
-                0.0,
-                .04
-                #self.mass_s3_kg * self.gravity_m_s2
-            ], dtype=np.float64)
-
-            # Base frame -> object frame
-            gravity_obj_s3 = rot_base_obj.T @ gravity_base_s3
-
-            # Object frame -> finger 3 position sensor frame
-            gravity_s3_finger3 = rot_finger3_obj.T @ gravity_obj_s3
-
-            # Final gravity-compensated force
-            force_s3_finger3_gc = force_s3_finger3 
+            
+            print(f"Force sensor 3 in finger 3 position sensor frame: {force_s3_finger3[0]:.2f}, {force_s3_finger3[1]:.2f}, {force_s3_finger3[2]:.2f}")
 
             # ─────────────────────────────────────────────────────────────────
             # Publish data.
@@ -290,9 +211,6 @@ class LabjackATINode(Node):
 
                 # Force sensor 3 in finger 3 position sensor frame
                 force_s3_finger3.astype(np.float64),
-
-                # # Finger 3 position sensor location expressed in object frame
-                # pos_obj_finger3.astype(np.float64),
 
                 # Timestamp
                 np.array([timestamp_sec], dtype=np.float64)
@@ -359,7 +277,7 @@ class LabjackATINode(Node):
             [-1.0, 0.0, 0.0]
         ])
 
-        rot_obj_force = rot_z @ rot_base @ self.sensor_rot_z_48
+        rot_obj_force = rot_z.T @ rot_base @ self.sensor_rot_z_48.T
 
         return rot_obj_force
 
