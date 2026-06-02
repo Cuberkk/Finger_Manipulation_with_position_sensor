@@ -10,6 +10,7 @@ Launcher-style script that starts:
 
 import argparse
 import atexit
+from email import parser
 import os
 import shlex
 import signal
@@ -17,7 +18,7 @@ import subprocess
 import time
 
 
-DEFAULT_ROS_NODES_DIR = "/home/erie_lab/Finger_Manipulation_with_position_sensor/ros2_ws/src/erie_manipulation_ros2/erie_manipulation_ros2/ros_nodes"
+DEFAULT_ROS_NODES_DIR = "/Users/kyang/Finger_Manipulation_with_position_sensor/publishing_files"
 DEFAULT_CONDA_ACTIVATE_CMD = "activate-dlc"
 
 processes = []
@@ -47,10 +48,10 @@ def cleanup_processes():
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="Launch force publishers and CSV recorder for one trial.")
 
-    parser.add_argument("-u", required=True)
-    parser.add_argument("-s", required=True, type=int, choices=[50, 80])
-    parser.add_argument("-t", required=True, choices=["roll", "pitch", "yaw", "finger_gating"])
-    parser.add_argument("-tn", required=True)
+    parser.add_argument("-u", "--user-number", required=True)
+    parser.add_argument("-s", "--diameter-mm", required=True, type=int, choices=[50, 80])
+    parser.add_argument("-t", "--task-performed", required=True, choices=["roll", "pitch", "yaw", "finger_gating"])
+    parser.add_argument("-tn", "--trial-number", required=True)
 
     parser.add_argument("--duration-sec", type=float, default=0.0, help="0 means record until Ctrl+C in the recorder terminal")
     parser.add_argument("--data-root", default="data")
