@@ -74,7 +74,7 @@ def build_arg_parser():
 
 def main():
     args = build_arg_parser().parse_args()
-    atexit.register(cleanup_processes)
+    #atexit.register(cleanup_processes)
 
     nodes_dir = args.ros_nodes_dir.rstrip("/")
     activate_prefix = f"source ~/.bashrc && {args.activate_cmd} && cd {shlex.quote(nodes_dir)}"
