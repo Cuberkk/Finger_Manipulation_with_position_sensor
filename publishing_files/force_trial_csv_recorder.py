@@ -207,20 +207,10 @@ class ForceTrialCSVRecorder(Node):
 
         self.writers[sensor.finger_name].writerow(
             {
-                "sample_index": sample_index,
-                "received_timestamp_sec": f"{received_timestamp_sec:.9f}",
-                "source_timestamp_sec": "" if source_timestamp_sec is None else f"{source_timestamp_sec:.9f}",
                 "Fx": f"{fx:.9f}",
                 "Fy": f"{fy:.9f}",
                 "Fz": f"{fz:.9f}",
-                "user_number": self.user_number,
-                "object_diameter_mm": self.diameter_mm,
-                "task_performed": self.task_performed,
-                "trial_number": self.trial_number,
-                "sensor_number": sensor.sensor_number,
-                "finger_name": sensor.finger_name,
-                "topic": sensor.topic,
-                "raw_msg_length": len(data),
+                "source_timestamp_sec": "" if source_timestamp_sec is None else f"{source_timestamp_sec:.9f}"
             }
         )
 
