@@ -9,10 +9,8 @@ Launcher-style script that starts:
 """
 
 import argparse
-import atexit
 import os
 import shlex
-import signal
 import subprocess
 import time
 
@@ -35,13 +33,6 @@ def run_command(command: str, shell_name: str):
     processes.append(proc)
     return proc
 
-
-def cleanup_processes():
-    for proc in processes:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        except Exception:
-            pass
 
 
 def build_arg_parser():
@@ -74,7 +65,6 @@ def build_arg_parser():
 
 def main():
     args = build_arg_parser().parse_args()
-    #atexit.register(cleanup_processes)
 
     nodes_dir = args.ros_nodes_dir.rstrip("/")
     activate_prefix = f"source ~/.bashrc && {args.activate_cmd} && cd {shlex.quote(nodes_dir)}"
