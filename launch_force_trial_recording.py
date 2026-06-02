@@ -54,7 +54,10 @@ def build_arg_parser():
     parser.add_argument("-tn", "--trial-number", required=True)
 
     parser.add_argument("--duration-sec", type=float, default=0.0, help="0 means record until Ctrl+C in the recorder terminal")
-    parser.add_argument("--data-root", default="data")
+    parser.add_argument(
+    "--data-root",
+    default="/home/erie_lab/Finger_Manipulation_with_position_sensor/data"
+)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--sensor-subfolders", action="store_true")
 
