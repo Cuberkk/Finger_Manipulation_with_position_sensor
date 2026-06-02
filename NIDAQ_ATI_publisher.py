@@ -97,7 +97,7 @@ class NIDAQATINode(Node):
 
         # Physical sensor spacing around the object.
         # sensor1 uses -120 degrees.
-        # sensor2 uses +120 degrees.
+        # sensor2 uses 0 degrees.
         self.sensor_angles_deg = {
             'sensor1': -120.0,
             'sensor2': 0.0,
@@ -105,7 +105,7 @@ class NIDAQATINode(Node):
 
         # Extra ATI sensor z-axis alignment rotation.
         # This is Rz(48 degrees), same idea as the LabJack ATI publisher.
-        z_rot_48 = 48.0
+        z_rot_48 = -48.
         z_rot_rad = np.deg2rad(z_rot_48)
         self.sensor_rot_z_48 = np.array([
             [np.cos(z_rot_rad), -np.sin(z_rot_rad), 0.0],
@@ -304,56 +304,17 @@ class NIDAQATINode(Node):
             # Rotate force vectors into matching finger position sensor frames.
             force_s1_finger1 = rot_finger1_force_s1 @ force_s1
             force_s2_finger2 = rot_finger2_force_s2 @ force_s2
-
-            # ─────────────────────────────────────────────────────────────────
-            # Gravity compensation
-            #
-            # Polhemus base z-axis points down, so:
-            #   F_g,B = [0, 0, m*g]
-            #
-            # Rotate gravity:
-            #   base frame -> object frame -> finger position sensor frame
-            #
-            # Then subtract it from the measured force already expressed in
-            # the finger position sensor frame.
-            # ─────────────────────────────────────────────────────────────────
-
-            gravity_base_s1 = np.array([
-                0.0,
-                0.0,
-                .04
-                #self.mass_s1_kg * self.gravity_m_s2
-            ], dtype=np.float64)
-
-            gravity_base_s2 = np.array([
-                0.0,
-                0.0,
-                .04
-               #self.mass_s2_kg * self.gravity_m_s2
-            ], dtype=np.float64)
-
-            # Base frame -> object frame
-            gravity_obj_s1 = rot_base_obj.T @ gravity_base_s1
-            gravity_obj_s2 = rot_base_obj.T @ gravity_base_s2
-
-            # Object frame -> finger position sensor frame
-            gravity_s1_finger1 = rot_obj_finger1.T @ gravity_obj_s1
-            gravity_s2_finger2 = rot_obj_finger2.T @ gravity_obj_s2
-
-            # Final gravity-compensated forces
-            force_s1_finger1_gc = force_s1_finger1 - gravity_s1_finger1
-            force_s2_finger2_gc = force_s2_finger2 - gravity_s2_finger2
-
+            
             # ─────────────────────────────────────────────────────────────────
             # Publish data.
             # ─────────────────────────────────────────────────────────────────
 
             data_arr = np.concatenate([
                 # Force sensor 1 in finger 1 position sensor frame
-                force_s1_finger1_gc.astype(np.float64),
+                force_s1_finger1.astype(np.float64),
 
                 # Force sensor 2 in finger 2 position sensor frame
-                force_s2_finger2_gc.astype(np.float64),
+                force_s2_finger2.astype(np.float64),
 
                 # Timestamp
                 np.array([timestamp_sec], dtype=np.float64)
@@ -411,7 +372,7 @@ class NIDAQATINode(Node):
             [-1.0, 0.0, 0.0]
         ])
 
-        rot_obj_force = rot_z @ rot_base @ self.sensor_rot_z_48
+        rot_obj_force = rot_z.T @ rot_base @ self.sensor_rot_z_48.T
 
         return rot_obj_force
 
