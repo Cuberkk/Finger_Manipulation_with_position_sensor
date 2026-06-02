@@ -18,7 +18,7 @@ import subprocess
 import time
 
 
-DEFAULT_ROS_NODES_DIR = "/Users/kyang/Finger_Manipulation_with_position_sensor/publishing_files"
+DEFAULT_ROS_NODES_DIR = "/home/erie_lab/Finger_Manipulation_with_position_sensor/publishing_files"
 DEFAULT_CONDA_ACTIVATE_CMD = "activate-dlc"
 
 processes = []
