@@ -10,7 +10,6 @@ Launcher-style script that starts:
 
 import argparse
 import atexit
-from email import parser
 import os
 import shlex
 import signal

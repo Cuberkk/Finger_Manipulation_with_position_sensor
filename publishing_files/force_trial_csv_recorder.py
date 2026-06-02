@@ -16,7 +16,6 @@ Default topic mapping:
 
 import argparse
 import csv
-from email import parser
 import json
 import shutil
 from dataclasses import dataclass
