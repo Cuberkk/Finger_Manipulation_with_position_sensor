@@ -100,7 +100,7 @@ class ForceTrialCSVRecorder(Node):
             self.stop_timer = self.create_timer(self.duration_sec, self.stop_after_duration)
             self.get_logger().info(f"Recorder will stop after {self.duration_sec:.2f} seconds")
         else:
-            self.duration_sec = None
+            self.duration_sec = 35.0
             self.stop_timer = None
 
     def _make_trial_dir(self, data_root: str, overwrite: bool) -> Path:
@@ -148,28 +148,6 @@ class ForceTrialCSVRecorder(Node):
             self.files[sensor.finger_name] = f
             self.writers[sensor.finger_name] = writer
 
-    def _write_metadata_file(self) -> None:
-        metadata = {
-            "created_at": datetime.now().isoformat(timespec="seconds"),
-            "user_number": self.user_number,
-            "object_diameter_mm": self.diameter_mm,
-            "task_performed": self.task_performed,
-            "trial_number": self.trial_number,
-            "trial_directory": str(self.trial_dir),
-            "sensor_mapping": [
-                {
-                    "sensor_number": s.sensor_number,
-                    "finger_name": s.finger_name,
-                    "topic": s.topic,
-                    "csv_file": str(self._csv_path_for_sensor(s)),
-                }
-                for s in self.sensors
-            ],
-            "message_format_expected": "Float64MultiArray([Fx, Fy, Fz, timestamp_sec])",
-        }
-
-        with open(self.trial_dir / "trial_metadata.json", "w") as f:
-            json.dump(metadata, f, indent=2)
 
     def force_callback(self, msg: Float64MultiArray, sensor: SensorConfig) -> None:
         data = list(msg.data)
