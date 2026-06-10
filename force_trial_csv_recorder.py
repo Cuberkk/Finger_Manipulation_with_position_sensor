@@ -94,7 +94,6 @@ class ForceTrialCSVRecorder(Node):
                 f"Subscribed to {sensor.topic} -> sensor {sensor.sensor_number} ({sensor.finger_name})"
             )
 
-        self.status_timer = self.create_timer(5.0, self.print_status)
 
         if args.duration_sec is not None and float(args.duration_sec) > 0.0:
             self.duration_sec = float(args.duration_sec)
@@ -129,20 +128,10 @@ class ForceTrialCSVRecorder(Node):
 
     def _open_csv_files(self) -> None:
         header = [
-            "sample_index",
-            "received_timestamp_sec",
             "source_timestamp_sec",
             "Fx",
             "Fy",
-            "Fz",
-            "user_number",
-            "object_diameter_mm",
-            "task_performed",
-            "trial_number",
-            "sensor_number",
-            "finger_name",
-            "topic",
-            "raw_msg_length",
+            "Fz"
         ]
 
         for sensor in self.sensors:
