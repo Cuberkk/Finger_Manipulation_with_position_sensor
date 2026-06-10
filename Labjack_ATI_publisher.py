@@ -11,44 +11,6 @@ from scipy.spatial.transform import Rotation as R
 
 
 class LabjackATINode(Node):
-    """
-    ROS 2 publisher node for LabJack A
-    TI force sensor 3
-    plus Polhemus Viper position sensor transforms.
-
-    Force sensor:
-        sensor3 = LabJack ATI force sensor for finger 3
-
-    Polhemus Viper position sensors:
-        sensor4 = object position sensor
-        finger3_position_sensor = finger 3 position sensor
-
-    Main rotations computed:
-
-        1. ATI force sensor 3 frame -> object frame
-
-            R_object_force3
-
-        2. Finger 3 position sensor frame -> object frame
-
-            R_object_finger3pos
-
-        3. ATI force sensor 3 frame -> finger 3 position sensor frame
-
-            R_finger3pos_force3 = R_object_finger3pos.T @ R_object_force3
-
-    Published Float64MultiArray:
-
-        [
-            Fx3_obj, Fy3_obj, Fz3_obj,
-            Fx3_fingerpos3, Fy3_fingerpos3, Fz3_fingerpos3,
-            finger3_x_obj, finger3_y_obj, finger3_z_obj,
-            timestamp_sec
-        ]
-
-    Topic:
-        ati_data
-    """
 
     def __init__(self):
         super().__init__('ati_node')

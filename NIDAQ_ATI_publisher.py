@@ -11,48 +11,6 @@ from utils.NIDAQReaderDual import NIDAQReaderDual
 
 
 class NIDAQATINode(Node):
-    """
-    ROS 2 publisher node for two NI-DAQ ATI force/torque sensors
-    plus Polhemus Viper position sensor transforms.
-
-    Force sensors from NI-DAQ:
-        sensor1 = ATI force sensor for finger 1
-        sensor2 = ATI force sensor for finger 2
-
-    Polhemus Viper position sensors:
-        sensor4 = object position sensor
-        sensor1 = finger 1 position sensor frame
-        sensor2 = finger 2 position sensor frame
-
-    Main rotations computed:
-
-        1. ATI force sensor frame -> object frame
-
-            R_object_force
-
-        2. Finger position sensor frame -> object frame
-
-            R_object_fingerpos
-
-        3. ATI force sensor frame -> matching finger position sensor frame
-
-            R_fingerpos_force = R_object_fingerpos.T @ R_object_force
-
-    Reader output from NIDAQReaderDual.stream_read():
-        Sensor 1: indices 0:6  -> [Fx1, Fy1, Fz1, Tx1, Ty1, Tz1]
-        Sensor 2: indices 6:12 -> [Fx2, Fy2, Fz2, Tx2, Ty2, Tz2]
-
-    Published Float64MultiArray:
-
-        [
-            Fx1_fingerpos1, Fy1_fingerpos1, Fz1_fingerpos1,
-            Fx2_fingerpos2, Fy2_fingerpos2, Fz2_fingerpos2,
-            timestamp_sec
-        ]
-
-    Topic:
-        ERIE_Manipulation/force/finger1_2
-    """
 
     def __init__(self):
         super().__init__('nidaq_ati_node')
