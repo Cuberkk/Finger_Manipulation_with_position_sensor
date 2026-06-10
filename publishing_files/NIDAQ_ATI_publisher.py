@@ -88,7 +88,7 @@ class NIDAQATINode(Node):
 
         # Object position sensor frame.
         # This is the Polhemus Viper sensor attached to the object/cylinder.
-        self.object_position_frame = 'sensor3'
+        self.object_position_frame = 'sensor4'
 
         # Individual finger position sensor frames.
         # These now match the Polhemus TF frame names directly.
@@ -251,7 +251,7 @@ class NIDAQATINode(Node):
 
             # Check transform age.
             for name, trans in [
-                ("object sensor3", t_base_obj),
+                ("object sensor4", t_base_obj),
                 ("finger1 position sensor", t_base_finger1),
                 ("finger2 position sensor", t_base_finger2),
             ]:

@@ -89,14 +89,11 @@ def main():
 
     recorder_cmd = " ".join(recorder_parts)
 
-    if not args.no_publishers:
-        run_command(nidaq_cmd, "Shell 1 (NI-DAQ ATI Publisher: Thumb + Index)")
-        time.sleep(2)
+    # if not args.no_publishers:
+    #     run_command(labjack_cmd, "Shell 1 (LabJack ATI Publisher: Middle)")
+    #     time.sleep(2)
 
-        run_command(labjack_cmd, "Shell 2 (LabJack ATI Publisher: Middle)")
-        time.sleep(2)
-
-    run_command(recorder_cmd, "Shell 3 (Force Trial CSV Recorder)")
+    run_command(recorder_cmd, "Shell 2 (Force Trial CSV Recorder)")
 
     print("All force recording processes are launched.")
     print("Trial folder will be under:")

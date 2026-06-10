@@ -19,9 +19,9 @@ class RotationalError(Node):
         self.trans_delay = 1.5
 
         self.rotational_gt = np.array([
-            [-1.0, 0.0, 0.0],
-            [ 0.0, 1.0, 0.0],
-             [0.0, 0.0,-1.0]
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0,-1.0]
         ])
 
         # ─────────────────────────────────────────────────────────────────────
@@ -65,7 +65,7 @@ class RotationalError(Node):
                 return
 
             rot_curr = self.transform_rot_generator(t_base_finger)
-            print(f"Current rotation matrix:\n{rot_curr}")
+            # print(f"Current rotation matrix:\n{rot_curr}")
             err = np.trace(self.rotational_gt.T @ rot_curr) - 3
 
             data_msg = Float64MultiArray(

@@ -99,6 +99,12 @@ class LabjackATINode(Node):
             [0.0,                0.0,               1.0]
         ])
 
+        self.sensor_rot_x_n180 = np.array([
+            [1., 0., 0.0],
+            [0.,  -1., 0.0],
+            [0.0, 0.0, -1.0]
+        ])
+
         self.rot_obj_force_s3 = self.ati_force_to_object_rotation('sensor3')
 
         # ─────────────────────────────────────────────────────────────────────
@@ -200,6 +206,8 @@ class LabjackATINode(Node):
 
             # Rotate force sensor 3 force vector into finger 3 position sensor frame.
             force_s3_finger3 = rot_finger3_force_s3 @ force_s3
+
+            force_s3_finger3 = self.sensor_rot_x_n180 @ force_s3_finger3
             
             print(f"Force sensor 3 in finger 3 position sensor frame: {force_s3_finger3[0]:.2f}, {force_s3_finger3[1]:.2f}, {force_s3_finger3[2]:.2f}")
 
