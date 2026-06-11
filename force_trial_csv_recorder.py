@@ -79,7 +79,6 @@ class ForceTrialCSVRecorder(Node):
         self.writers: Dict[str, csv.DictWriter] = {}
         self.counts: Dict[str, int] = {s.finger_name: 0 for s in self.sensors}
         self._open_csv_files()
-        self._write_metadata_file()
 
         self.subscribers = []
         for sensor in self.sensors:
@@ -98,9 +97,8 @@ class ForceTrialCSVRecorder(Node):
         if args.duration_sec is not None and float(args.duration_sec) > 0.0:
             self.duration_sec = float(args.duration_sec)
             self.stop_timer = self.create_timer(self.duration_sec, self.stop_after_duration)
-            self.get_logger().info(f"Recorder will stop after {self.duration_sec:.2f} seconds")
         else:
-            self.duration_sec = 35.0
+            self.duration_sec = None
             self.stop_timer = None
 
     def _make_trial_dir(self, data_root: str, overwrite: bool) -> Path:
@@ -221,7 +219,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("-tn", "--trial-number", required=True, help="Trial number, e.g. 1 or 001")
 
     parser.add_argument("--data-root", default="data", help="Root folder where data/ will be created")
-    parser.add_argument("--duration-sec", type=float, default=0.0, help="Stop automatically after this many seconds. 0 means run until Ctrl+C")
+    parser.add_argument("--duration-sec", type=float, default=35.0, help="Stop automatically after this many seconds. 0 means run until Ctrl+C")
     parser.add_argument("--flush-every", type=int, default=25, help="Flush each CSV after this many samples")
     parser.add_argument("--overwrite", action="store_true", help="Delete and recreate the trial folder before recording")
     parser.add_argument("--sensor-subfolders", action="store_true", help="Put each CSV inside its own sensor folder inside the trial folder")
