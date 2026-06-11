@@ -12,6 +12,7 @@ from scipy.spatial.transform import Rotation as R
 
 class LabjackATINode(Node):
 
+
     def __init__(self):
         super().__init__('ati_node')
 
@@ -125,9 +126,21 @@ class LabjackATINode(Node):
 
         # LabJack reader returns:
         # [Fx3, Fy3, Fz3, Tx3, Ty3, Tz3]
-        ft_arr = self.ati_reader.stream_read()
+        try:
+            ft_arr = self.ati_reader.stream_read()
 
-        # Extract force vector only.
+            if ft_arr is None:
+                self.get_logger().warn("No force data received from sensor 3. Skipping this sample.")
+                return
+            
+            if ft_arr.size < 3:
+                self.get_logger().warn(f"Bad force data from sensor 3: expected at least 3 values, got {ft_arr.size}. Skipping this sample." )
+                return
+
+        except Exception as exc:
+            self.get_logger().warn(f"Could not read force sensor 3: {exc}. Skipping this sample.")
+            return
+
         force_s3 = np.asarray(ft_arr[:3], dtype=np.float64)
 
         timestamp = self.get_clock().now().to_msg()
