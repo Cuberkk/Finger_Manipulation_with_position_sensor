@@ -20,7 +20,7 @@ from typing import List
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float64MultiArray, MultiArrayDimension, MultiArrayLayout
+from std_msgs.msg import Float64MultiArray
 
 
 @dataclass(frozen=True)
@@ -44,12 +44,17 @@ class RandomForceMatrixPublisher(Node):
             SensorTopic(3, "middle", args.middle_topic),
         ]
 
-        self.publishers = {
-            sensor.finger_name: self.create_publisher(Float64MultiArray, sensor.topic, 10)
+        self.force_publishers = {
+            sensor.finger_name: self.create_publisher(
+                Float64MultiArray, sensor.topic, 10
+            )
             for sensor in self.sensors
         }
 
-        self.timer = self.create_timer(1.0 / self.publish_rate_hz, self.timer_callback)
+        self.timer = self.create_timer(
+            1.0 / self.publish_rate_hz,
+            self.timer_callback,
+        )
 
         for sensor in self.sensors:
             self.get_logger().info(
@@ -57,16 +62,7 @@ class RandomForceMatrixPublisher(Node):
                 f"({sensor.finger_name}) on {sensor.topic}"
             )
 
-    def _build_layout(self) -> MultiArrayLayout:
-        return MultiArrayLayout(
-            dim=[
-                MultiArrayDimension(label="rows", size=3, stride=3),
-                MultiArrayDimension(label="cols", size=1, stride=1),
-            ],
-            data_offset=0,
-        )
-
-    def _random_force_vector(self) -> List[float]:
+    def random_force_vector(self) -> List[float]:
         return [
             random.uniform(self.min_force, self.max_force),
             random.uniform(self.min_force, self.max_force),
@@ -75,16 +71,14 @@ class RandomForceMatrixPublisher(Node):
 
     def timer_callback(self) -> None:
         timestamp_sec = self.get_clock().now().nanoseconds * 1e-9
-        layout = self._build_layout()
 
         for sensor in self.sensors:
-            fx, fy, fz = self._random_force_vector()
+            fx, fy, fz = self.random_force_vector()
 
             msg = Float64MultiArray()
-            msg.layout = layout
             msg.data = [fx, fy, fz, timestamp_sec]
 
-            self.publishers[sensor.finger_name].publish(msg)
+            self.force_publishers[sensor.finger_name].publish(msg)
 
             self.get_logger().debug(
                 f"{sensor.finger_name}: "

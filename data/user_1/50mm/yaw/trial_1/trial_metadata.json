@@ -1,0 +1,29 @@
+{
+  "created_at": "2026-06-10T15:52:24",
+  "user_number": "1",
+  "object_diameter_mm": 50,
+  "task_performed": "yaw",
+  "trial_number": "1",
+  "trial_directory": "data/user_1/50mm/yaw/trial_1",
+  "sensor_mapping": [
+    {
+      "sensor_number": 1,
+      "finger_name": "thumb",
+      "topic": "/ERIE_Manipulation/force/force_s1_finger1",
+      "csv_file": "data/user_1/50mm/yaw/trial_1/thumb.csv"
+    },
+    {
+      "sensor_number": 2,
+      "finger_name": "index",
+      "topic": "/ERIE_Manipulation/force/force_s2_finger2",
+      "csv_file": "data/user_1/50mm/yaw/trial_1/index.csv"
+    },
+    {
+      "sensor_number": 3,
+      "finger_name": "middle",
+      "topic": "/ERIE_Manipulation/force/finger3",
+      "csv_file": "data/user_1/50mm/yaw/trial_1/middle.csv"
+    }
+  ],
+  "message_format_expected": "Float64MultiArray([Fx, Fy, Fz, timestamp_sec])"
+}

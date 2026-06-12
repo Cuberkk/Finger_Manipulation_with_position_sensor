@@ -148,13 +148,14 @@ class ForceTrialCSVRecorder(Node):
 
 
     def force_callback(self, msg: Float64MultiArray, sensor: SensorConfig) -> None:
+        print(f"Callback fired for {sensor.finger_name}: {list(msg.data)}")
         data = list(msg.data)
         if len(data) < 3:
             self.get_logger().warn(
                 f"Skipping {sensor.finger_name}: expected at least [Fx, Fy, Fz], got {len(data)} values"
             )
             return
-
+        
         fx = float(data[0])
         fy = float(data[1])
         fz = float(data[2])
