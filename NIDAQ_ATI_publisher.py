@@ -27,7 +27,7 @@ class NIDAQATINode(Node):
         self.phys_channels = 'Dev1/ai0:7,Dev1/ai16:19'
 
         # Publish/read rate in Hz.
-        self.publish_rate = 60.0
+        self.publish_rate = 600.0
 
         # Bias settings.
         self.bias_time = 5

@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
+import time
 
 import rclpy
 from rclpy.node import Node
@@ -89,11 +90,11 @@ class ForceTrialCSVRecorder(Node):
                 1000,
             )
             self.subscribers.append(sub)
-            self.get_logger().info(
-                f"Subscribed to {sensor.topic} -> sensor {sensor.sensor_number} ({sensor.finger_name})"
-            )
+            # self.get_logger().info(
+            #     f"Subscribed to {sensor.topic} -> sensor {sensor.sensor_number} ({sensor.finger_name})"
+            # )
 
-
+        self.first_frame = True
         if args.duration_sec is not None and float(args.duration_sec) > 0.0:
             self.duration_sec = float(args.duration_sec)
             self.stop_timer = self.create_timer(self.duration_sec, self.stop_after_duration)
@@ -148,7 +149,11 @@ class ForceTrialCSVRecorder(Node):
 
 
     def force_callback(self, msg: Float64MultiArray, sensor: SensorConfig) -> None:
-        print(f"Callback fired for {sensor.finger_name}: {list(msg.data)}")
+        if self.first_frame:
+            self.start_time = time.time()
+            self.first_frame = False
+        
+        # print(f"Callback fired for {sensor.finger_name}: {list(msg.data)}")
         data = list(msg.data)
         if len(data) < 3:
             self.get_logger().warn(
@@ -182,14 +187,19 @@ class ForceTrialCSVRecorder(Node):
 
         if sample_index % self.flush_every == 0:
             self.files[sensor.finger_name].flush()
+        curr_time = time.time()
+        elapsed_time = curr_time - self.start_time
+
+        print(f"Elapsed time: {elapsed_time:.2f} seconds", end='\r')
 
     def print_status(self) -> None:
-        self.get_logger().info(
-            "Samples recorded: "
-            f"thumb={self.counts['thumb']}, "
-            f"index={self.counts['index']}, "
-            f"middle={self.counts['middle']}"
-        )
+        # self.get_logger().info(
+        #     "Samples recorded: "
+        #     f"thumb={self.counts['thumb']}, "
+        #     f"index={self.counts['index']}, "
+        #     f"middle={self.counts['middle']}"
+        # )
+        return
 
     def stop_after_duration(self) -> None:
         self.get_logger().info("Requested duration reached. Closing CSV files and stopping recorder.")
@@ -220,9 +230,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("-tn", "--trial-number", required=True, help="Trial number, e.g. 1 or 001")
 
     parser.add_argument("--data-root", default="data", help="Root folder where data/ will be created")
-    parser.add_argument("--duration-sec", type=float, default=35.0, help="Stop automatically after this many seconds. 0 means run until Ctrl+C")
+    parser.add_argument("--duration-sec", type=float, default=30.0, help="Stop automatically after this many seconds. 0 means run until Ctrl+C")
     parser.add_argument("--flush-every", type=int, default=25, help="Flush each CSV after this many samples")
-    parser.add_argument("--overwrite", action="store_true", help="Delete and recreate the trial folder before recording")
+    parser.add_argument("-ow","--overwrite", action="store_true", help="Delete and recreate the trial folder before recording")
     parser.add_argument("--sensor-subfolders", action="store_true", help="Put each CSV inside its own sensor folder inside the trial folder")
 
     parser.add_argument(

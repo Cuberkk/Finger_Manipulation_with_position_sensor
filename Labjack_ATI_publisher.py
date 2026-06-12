@@ -76,7 +76,7 @@ class LabjackATINode(Node):
 
         self.ati_pub = self.create_publisher(
             Float64MultiArray,
-            'ERIE_Manipulation/force/finger3',
+            'ERIE_Manipulation/force/force_s3_finger3',
             1
         )
 
