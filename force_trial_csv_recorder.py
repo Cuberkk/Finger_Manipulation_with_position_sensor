@@ -247,7 +247,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--middle-topic",
-        default="/ERIE_Manipulation/force/finger3",
+        default="/ERIE_Manipulation/force/force_s3_finger3",
         help="Topic for sensor 3 / middle",
     )
 

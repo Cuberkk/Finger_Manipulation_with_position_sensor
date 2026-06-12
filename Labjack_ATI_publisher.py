@@ -79,6 +79,12 @@ class LabjackATINode(Node):
             'ERIE_Manipulation/force/force_s3_finger3',
             1
         )
+        
+        self.ati_pub_raw = self.create_publisher(
+            Float64MultiArray,
+            'ERIE_Manipulation/force/force_s3_raw',
+            1
+        )
 
         self.timer = self.create_timer(
             1.0 / self.publish_rate,
@@ -142,6 +148,12 @@ class LabjackATINode(Node):
             return
 
         force_s3 = np.asarray(ft_arr[:3], dtype=np.float64)
+        
+        raw_data_msg = Float64MultiArray(
+            data=force_s3.flatten().tolist()
+        )
+        
+        self.ati_pub_raw.publish(raw_data_msg)
 
         timestamp = self.get_clock().now().to_msg()
         timestamp_sec = np.float64(
@@ -184,7 +196,7 @@ class LabjackATINode(Node):
 
             force_s3_finger3 = self.sensor_rot_x_n180 @ force_s3_finger3
             
-            print(f"Force sensor 3 in finger 3 position sensor frame: {force_s3_finger3[0]:.2f}, {force_s3_finger3[1]:.2f}, {force_s3_finger3[2]:.2f}")
+            # print(f"Force sensor 3 in finger 3 position sensor frame: {force_s3_finger3[0]:.2f}, {force_s3_finger3[1]:.2f}, {force_s3_finger3[2]:.2f}")
 
             # ─────────────────────────────────────────────────────────────────
             # Publish data.
@@ -276,7 +288,7 @@ class LabjackATINode(Node):
         )
 
         dt = abs(now.nanoseconds - tf_stamp.nanoseconds) * 1e-9
-        print(f"Transform age: {dt:.3f} seconds")
+        # print(f"Transform age: {dt:.3f} seconds")
 
         return dt < self.trans_delay
 
