@@ -11,7 +11,7 @@ Expected topic message format from your publishers:
 Default topic mapping:
     sensor 1 -> thumb  -> /ERIE_Manipulation/force/force_s1_finger1
     sensor 2 -> index  -> /ERIE_Manipulation/force/force_s2_finger2
-    sensor 3 -> middle -> /ERIE_Manipulation/force/finger3
+    sensor 3 -> middle -> /ERIE_Manipulation/force/force_s3_finger3
 """
 
 import argparse
