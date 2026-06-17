@@ -35,7 +35,7 @@ For force-only analysis, scaling is disabled to preserve the physical magnitude 
 ## Finger Force to Finger Position Frame Calculations
 Fingers 1 & 2 refer to NIDAQ_ATI_publisher.py</br>
 Finger 3 refer to Labjack_ATI_publisher.py
-<i><p style= "font-size: 17px;" > Finger Force 1 to Finger  Postion 1 Rotations: </br>
+<b><i><p style= "font-size: 16px;" > Finger Force 1 to Finger  Postion 1 Rotations: </b> </br>
 </i> <p style= "font-size: 13px;" > 
 <b>F<sub>finger<sub>1</sub></sub></b>
 =(
@@ -46,9 +46,9 @@ R<sub>object←force<sub>1</sub>'</sub>
 R<sub>force<sub>1</sub>'←force<sub>1</sub></sub>(48°)
 )
 F<sub>force<sub>1</sub></sub>
-<i><p style= "font-size: 17px;" > Finger Force 2 to Finger Position 2 Rotations: </br>
+<b><i><p style= "font-size: 16px;" > Finger Force 2 to Finger Position 2 Rotations:</b> </br>
 </i><p style= "font-size: 13px;" > 
-<b>F<sub>finger<sub>2</sub></sub></b>
+<i><b>F<sub>finger<sub>2</sub></sub></b>
 =(
 R<sup>T</sup><sub>base←finger<sub>2</sub></sub>
 R<sub>base←obj</sub>
@@ -56,13 +56,13 @@ R<sub>force<sub>2</sub>'←force<sub>2</sub>'</sub>(0°)
 R<sub>object←force<sub>2</sub>'</sub>
 R<sub>force<sub>2</sub>'←force<sub>2</sub></sub>(48°)
 )
-F<sub>force<sub>2</sub></sub>
-<i> <p style= "font-size: 17px;" > Finger Force 3 to Finger Position 3 Rotations: 
+F<sub>force<sub>2</sub></sub> </i>
+<b> <i> <p style= "font-size: 16px;" > Finger Force 3 to Finger Position 3 Rotations: </b>
 </i> <p style= "font-size: 13px;" > 
-    <li></b>Case 1: Includes R<sub>x</sub>(180°) to account for large polhemus sensor </br> </li>
+    <li> Case 1: Includes R<sub>x</sub>(180°) to account for large polhemus sensor </br> </li>
 
 </i> <p style= "font-size: 13px;" > 
-<b>F<sub>finger<sub>3</sub></sub></b>
+<i><b>F<sub>finger<sub>3</sub></sub></b>
 =(
 R<sub>x</sub>(180°)
 R<sup>T</sup><sub>base←finger<sub>3</sub></sub>
@@ -71,12 +71,12 @@ R<sub>force<sub>2</sub>'←force<sub>3</sub>'</sub>(-120°)
 R<sub>object←force<sub>3</sub>'</sub>
 R<sub>force<sub>3</sub>'←force<sub>3</sub></sub>(48°)
 )
-F<sub>force<sub>3</sub></sub>
+F<sub>force<sub>3</sub></sub> </i>
 
 <li> Case 2:Without R<sub>x</sub>(180°) </br>
 
 </i> <p style= "font-size: 13px;" > 
-<b>F<sub>finger<sub>3</sub></sub></b>
+<i><b>F<sub>finger<sub>3</sub></sub></b>
 =(
 R<sup>T</sup><sub>base←finger<sub>3</sub></sub>
 R<sub>base←obj</sub>
@@ -84,29 +84,29 @@ R<sub>force<sub>2</sub>'←force<sub>3</sub>'</sub>(-120°)
 R<sub>object←force<sub>3</sub>'</sub>
 R<sub>force<sub>3</sub>'←force<sub>3</sub></sub>(48°)
 )
-F<sub>force<sub>3</sub></sub>
+F<sub>force<sub>3</sub></sub> </i>
 
 ## Error Calculations
 For finger to object refer to relative_rotational_error_node.py</br>
 For finger to base refer to rotational_error_node.py
 
-<i> <p style= "font-size: 17px;" > Calibrating Finger Postion Sensor to Object Postion Sensor Rotations: </br>
-</i> <p style= "font-size: 13px;" > 
-<b>R<sub>finger←object</sub></b>
+<b><i> <p style= "font-size: 16px;" > Calibrating Finger Postion Sensor to Object Postion Sensor Rotations: </b></br>
+</i> <p style= "font-size: 12px;" > 
+<i><b>R<sub>finger←object</sub></b>
 =R<sup>T</sup><sub>base←finger</sub>
 R<sub>base←object</sub>
-<p style= "font-size: 13px;" > 
+<p style= "font-size: 12px;" > 
 <b>Error</b>
 =tr(
 R<sub>finger←object</sub>
 )
-− 3
-<i><p style= "font-size: 17px;" > Calibrating Finger Position Sensor to Polhemus Base Rotations: </br>
-</i> <p style= "font-size: 13px;" > 
-<b>R<sub>error</sub></b>
+− 3 </i>
+<b><i><p style= "font-size: 16px;" > Calibrating Finger Position Sensor to Polhemus Base Rotations: </b> </br>
+</i> <p style= "font-size: 12px;" > 
+<i><b>R<sub>error</sub></b>
 =R<sup>T</sup><sub>GT</sub>
-R<sub>base←sensor</sub>
-<p style= "font-size: 13px;" > 
+R<sub>base←sensor</sub> 
+<p style= "font-size: 12px;" > 
 <b>Error</b>
 =tr(
 R<sub>error</sub>
