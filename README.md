@@ -37,65 +37,80 @@ Fingers 1 & 2 refer to NIDAQ_ATI_publisher.py</br>
 Finger 3 refer to Labjack_ATI_publisher.py
 <i><p style= "font-size: 17px;" > Finger Force 1 to Finger  Postion 1 Rotations: </br>
 </i> <p style= "font-size: 13px;" > 
-<b>F<sub>finger1</sub></b>
+<b>F<sub>finger<sub>1</sub></sub></b>
 =(
-R<sup>T</sup><sub>base←finger1</sub>
+R<sup>T</sup><sub>base←finger<sub>1</sub></sub>
 R<sub>base←obj</sub>
-R<sub>z</sub>(120°)
-R<sub>base</sub>
-R<sub>z</sub>(48°)
+R<sub>force<sub>2</sub>'←force<sub>1</sub>'</sub>(120°)
+R<sub>object←force<sub>1</sub>'</sub>
+R<sub>force<sub>1</sub>'←force<sub>1</sub></sub>(48°)
 )
-<b>F<sub>force1</sub></b>
+F<sub>force<sub>1</sub></sub>
 <i><p style= "font-size: 17px;" > Finger Force 2 to Finger Position 2 Rotations: </br>
 </i><p style= "font-size: 13px;" > 
-<b>F<sub>finger2</sub></b>
+<b>F<sub>finger<sub>2</sub></sub></b>
 =(
-R<sup>T</sup><sub>base←finger2</sub>
+R<sup>T</sup><sub>base←finger<sub>2</sub></sub>
 R<sub>base←obj</sub>
-R<sub>z</sub>(0°)
-R<sub>base</sub>
-R<sub>z</sub>(48°)
+R<sub>force<sub>2</sub>'←force<sub>2</sub>'</sub>(0°)
+R<sub>object←force<sub>2</sub>'</sub>
+R<sub>force<sub>2</sub>'←force<sub>2</sub></sub>(48°)
 )
-<b>F<sub>force2</sub></b> </br>
+F<sub>force<sub>2</sub></sub>
 <i> <p style= "font-size: 17px;" > Finger Force 3 to Finger Position 3 Rotations: 
 </i> <p style= "font-size: 13px;" > 
-<b>F<sub>finger3</sub></b>
+    <li></b>Case 1: Includes R<sub>x</sub>(180°) to account for large polhemus sensor </br> </li>
+
+</i> <p style= "font-size: 13px;" > 
+<b>F<sub>finger<sub>3</sub></sub></b>
 =(
 R<sub>x</sub>(180°)
-R<sup>T</sup><sub>base←finger3</sub>
+R<sup>T</sup><sub>base←finger<sub>3</sub></sub>
 R<sub>base←obj</sub>
-R<sub>z</sub>(-120°)
-R<sub>base</sub>
-R<sub>z</sub>(48°)
+R<sub>force<sub>2</sub>'←force<sub>3</sub>'</sub>(-120°)
+R<sub>object←force<sub>3</sub>'</sub>
+R<sub>force<sub>3</sub>'←force<sub>3</sub></sub>(48°)
 )
-<b>F<sub>force3</sub></b>
+F<sub>force<sub>3</sub></sub>
+
+<li> Case 2:Without R<sub>x</sub>(180°) </br>
+
+</i> <p style= "font-size: 13px;" > 
+<b>F<sub>finger<sub>3</sub></sub></b>
+=(
+R<sup>T</sup><sub>base←finger<sub>3</sub></sub>
+R<sub>base←obj</sub>
+R<sub>force<sub>2</sub>'←force<sub>3</sub>'</sub>(-120°)
+R<sub>object←force<sub>3</sub>'</sub>
+R<sub>force<sub>3</sub>'←force<sub>3</sub></sub>(48°)
+)
+F<sub>force<sub>3</sub></sub>
 
 ## Error Calculations
 For finger to object refer to relative_rotational_error_node.py</br>
 For finger to base refer to rotational_error_node.py
 
-<i><p style= "font-size: 17px;" > Calibrating Finger Postion Sensor to Object Postion Sensor Rotations: </br>
+<i> <p style= "font-size: 17px;" > Calibrating Finger Postion Sensor to Object Postion Sensor Rotations: </br>
 </i> <p style= "font-size: 13px;" > 
 <b>R<sub>finger←object</sub></b>
-=<b>R</b><sup>T</sup><sub>base←finger</sub>
-<b>R</b><sub>base←object</sub>
+=R<sup>T</sup><sub>base←finger</sub>
+R<sub>base←object</sub>
 <p style= "font-size: 13px;" > 
 <b>Error</b>
 =tr(
-<b>R<sub>finger←object</sub></b>
+R<sub>finger←object</sub>
 )
 − 3
 <i><p style= "font-size: 17px;" > Calibrating Finger Position Sensor to Polhemus Base Rotations: </br>
 </i> <p style= "font-size: 13px;" > 
 <b>R<sub>error</sub></b>
-=<b>R</b><sup>T</sup><sub>GT</sub>
-<b>R</b><sub>base←sensor</sub>
+=R<sup>T</sup><sub>GT</sub>
+R<sub>base←sensor</sub>
 <p style= "font-size: 13px;" > 
 <b>Error</b>
 =tr(
-<b>R<sub>error</sub></b>
+R<sub>error</sub>
 )
 − 3
 
 
-![alt text](data/roll_pitch_yaw.png)
