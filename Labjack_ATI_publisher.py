@@ -105,16 +105,6 @@ class LabjackATINode(Node):
             "LabJack ATI Sensor 3 + Polhemus Finger 3 Position Node Initialized"
         )
 
-        # ─────────────────────────────────────────────────────────────────────
-        # Gravity compensation settings
-        # ─────────────────────────────────────────────────────────────────────
-
-        #self.gravity_m_s2 = 9.80665
-
-        # Set this to the effective mass assigned to sensor/finger 3.
-        # Do NOT leave this at 0.0 during real data collection.
-        #self.mass_s3_kg = 0.0
-
     def timer_callback(self):
         """
         Main loop.
@@ -149,11 +139,11 @@ class LabjackATINode(Node):
 
         force_s3 = np.asarray(ft_arr[:3], dtype=np.float64)
         
-        raw_data_msg = Float64MultiArray(
+        raw_data_msg_f3 = Float64MultiArray(
             data=force_s3.flatten().tolist()
         )
         
-        self.ati_pub_raw.publish(raw_data_msg)
+        self.ati_pub_raw.publish(raw_data_msg_f3)
 
         timestamp = self.get_clock().now().to_msg()
         timestamp_sec = np.float64(

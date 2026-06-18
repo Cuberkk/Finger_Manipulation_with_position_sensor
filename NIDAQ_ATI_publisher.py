@@ -108,6 +108,18 @@ class NIDAQATINode(Node):
             'ERIE_Manipulation/force/force_s2_finger2',
             1
         )
+        
+        self.nidaq_pub_raw_s1 = self.create_publisher(
+            Float64MultiArray,
+            'ERIE_Manipulation/force/force_s1_raw',
+            1
+        )
+        
+        self.nidaq_pub_raw_s2  = self.create_publisher(
+            Float64MultiArray,
+            'ERIE_Manipulation/force/force_s2_raw',
+            1
+        )
 
         self.timer = self.create_timer(
             1.0 / self.publish_rate,
@@ -128,16 +140,6 @@ class NIDAQATINode(Node):
             "NI-DAQ ATI + Polhemus Finger Position Node Initialized"
         )
 
-        # ─────────────────────────────────────────────────────────────────────
-        # Gravity compensation settings
-        # ─────────────────────────────────────────────────────────────────────
-
-        #self.gravity_m_s2 = 9.80665
-
-        # Set these to the effective mass assigned to each sensor/finger.
-        # Do NOT leave these at 0.0 during real data collection.
-        #self.mass_s1_kg = 0.0
-        #self.mass_s2_kg = 0.0
 
     def timer_callback(self):
         """
@@ -162,6 +164,17 @@ class NIDAQATINode(Node):
         # Extract force vectors only.
         force_s1 = np.asarray(ft_arr[0:3], dtype=np.float64)
         force_s2 = np.asarray(ft_arr[6:9], dtype=np.float64)
+        
+        raw_data_msg_f1 = Float64MultiArray(
+            data=force_s1.flatten().tolist()
+        )
+        self.nidaq_pub_raw_s1.publish(raw_data_msg_f1)
+        
+        raw_data_msg_f2 = Float64MultiArray(
+            data=force_s2.flatten().tolist()
+        )
+        self.nidaq_pub_raw_s2.publish(raw_data_msg_f2)
+        
 
         timestamp = self.get_clock().now().to_msg()
         timestamp_sec = np.float64(

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-force_trial_csv_recorder.py
+force_raw_csv_recorder.py
 
 ROS 2 node that subscribes to the three finger force topics and records one CSV
 per finger for a single trial.
@@ -11,7 +11,7 @@ Expected topic message format from your publishers:
 Default topic mapping:
     sensor 1 -> thumb  -> /ERIE_Manipulation/force/force_s1_finger1
     sensor 2 -> index  -> /ERIE_Manipulation/force/force_s2_finger2
-    sensor 3 -> middle -> /ERIE_Manipulation/force/finger3
+    sensor 3 -> middle -> /ERIE_Manipulation/force/force_s3_finger3
 """
 
 import argparse
@@ -43,7 +43,7 @@ class SensorConfig:
 
 class ForceTrialCSVRecorder(Node):
     def __init__(self, args: argparse.Namespace):
-        super().__init__("force_trial_csv_recorder")
+        super().__init__("force_raw_csv_recorder")
 
         self.user_number = str(args.user_number)
         self.diameter_mm = int(args.diameter_mm)
@@ -57,19 +57,19 @@ class ForceTrialCSVRecorder(Node):
                 sensor_number=1,
                 finger_name="thumb",
                 topic=args.thumb_topic,
-                csv_name="thumb.csv",
+                csv_name="thumb_raw_force.csv",
             ),
             SensorConfig(
                 sensor_number=2,
                 finger_name="index",
                 topic=args.index_topic,
-                csv_name="index.csv",
+                csv_name="index_raw_force.csv",
             ),
             SensorConfig(
                 sensor_number=3,
                 finger_name="middle",
                 topic=args.middle_topic,
-                csv_name="middle.csv",
+                csv_name="middle_raw_force.csv",
             ),
         ]
 
@@ -237,12 +237,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--thumb-topic",
-        default="/ERIE_Manipulation/force/force_s1_finger1",
+        default="/ERIE_Manipulation/force/force_s1_raw",
         help="Topic for sensor 1 / thumb",
     )
     parser.add_argument(
         "--index-topic",
-        default="/ERIE_Manipulation/force/force_s2_finger2",
+        default="/ERIE_Manipulation/force/force_s2_raw",
         help="Topic for sensor 2 / index",
     )
     parser.add_argument(
