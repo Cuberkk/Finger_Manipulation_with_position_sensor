@@ -1,19 +1,4 @@
 #!/usr/bin/env python3
-"""
-force_raw_csv_recorder.py
-
-ROS 2 node that subscribes to the three finger force topics and records one CSV
-per finger for a single trial.
-
-Expected topic message format from your publishers:
-    Float64MultiArray([Fx, Fy, Fz, timestamp_sec])
-
-Default topic mapping:
-    sensor 1 -> thumb  -> /ERIE_Manipulation/force/force_s1_finger1
-    sensor 2 -> index  -> /ERIE_Manipulation/force/force_s2_finger2
-    sensor 3 -> middle -> /ERIE_Manipulation/force/force_s3_finger3
-"""
-
 import argparse
 import csv
 import json
@@ -43,7 +28,7 @@ class SensorConfig:
 
 class ForceTrialCSVRecorder(Node):
     def __init__(self, args: argparse.Namespace):
-        super().__init__("force_raw_csv_recorder")
+        super().__init__("object_raw_csv_recorder")
 
         self.user_number = str(args.user_number)
         self.diameter_mm = int(args.diameter_mm)
@@ -57,19 +42,19 @@ class ForceTrialCSVRecorder(Node):
                 sensor_number=1,
                 finger_name="thumb",
                 topic=args.thumb_topic,
-                csv_name="thumb_raw_force.csv",
+                csv_name="object_thumb_raw_force.csv",
             ),
             SensorConfig(
                 sensor_number=2,
                 finger_name="index",
                 topic=args.index_topic,
-                csv_name="index_raw_force.csv",
+                csv_name="object_index_raw_force.csv",
             ),
             SensorConfig(
                 sensor_number=3,
                 finger_name="middle",
                 topic=args.middle_topic,
-                csv_name="middle_raw_force.csv",
+                csv_name="object_middle_raw_force.csv",
             ),
         ]
 
@@ -131,9 +116,6 @@ class ForceTrialCSVRecorder(Node):
             "Fx",
             "Fy",
             "Fz",
-            "Tx",
-            "Ty",
-            "Tz",
         ]
 
         for sensor in self.sensors:
@@ -158,21 +140,17 @@ class ForceTrialCSVRecorder(Node):
         
         # print(f"Callback fired for {sensor.finger_name}: {list(msg.data)}")
         data = list(msg.data)
-        if len(data) < 7:
+        if len(data) < 3:
             self.get_logger().warn(
-                f"Skipping {sensor.finger_name}: expected [Fx, Fy, Fz, Tx, Ty, Tz, timestamp_sec], got {len(data)} values"
+                f"Skipping {sensor.finger_name}: expected at least [Fx, Fy, Fz], got {len(data)} values"
             )
             return
-
+        
         fx = float(data[0])
         fy = float(data[1])
         fz = float(data[2])
-        tx = float(data[3])
-        ty = float(data[4])
-        tz = float(data[5])
-        source_timestamp_sec = float(data[6])
 
-        # Your publishers currently send [Fx, Fy, Fz, Tx, Ty, Tz, timestamp_sec].
+        # Your publishers currently send [Fx, Fy, Fz, timestamp_sec].
         # If a future publisher sends extra values, this keeps using the last
         # value as the source timestamp.
         source_timestamp_sec: Optional[float]
@@ -188,9 +166,6 @@ class ForceTrialCSVRecorder(Node):
                 "Fx": f"{fx:.9f}",
                 "Fy": f"{fy:.9f}",
                 "Fz": f"{fz:.9f}",
-                "Tx": f"{tx:.9f}",
-                "Ty": f"{ty:.9f}",
-                "Tz": f"{tz:.9f}",
                 "source_timestamp_sec": "" if source_timestamp_sec is None else f"{source_timestamp_sec:.9f}"
             }
         )
@@ -247,17 +222,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--thumb-topic",
-        default="/ERIE_Manipulation/force/force_s1_raw",
+        default="/ERIE_Manipulation/force/object_force_s1_raw",
         help="Topic for sensor 1 / thumb",
     )
     parser.add_argument(
         "--index-topic",
-        default="/ERIE_Manipulation/force/force_s2_raw",
+        default="/ERIE_Manipulation/force/object_force_s2_raw",
         help="Topic for sensor 2 / index",
     )
     parser.add_argument(
         "--middle-topic",
-        default="/ERIE_Manipulation/force/force_s3_raw",
+        default="/ERIE_Manipulation/force/object_force_s3_raw",
         help="Topic for sensor 3 / middle",
     )
 

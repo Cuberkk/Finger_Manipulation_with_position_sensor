@@ -161,25 +161,36 @@ class NIDAQATINode(Node):
         #  Fx2,Fy2,Fz2,Tx2,Ty2,Tz2]
         ft_arr = self.nidaq_reader.read()
 
-        # Extract force vectors only.
-        force_s1 = np.asarray(ft_arr[0:3], dtype=np.float64)
-        force_s2 = np.asarray(ft_arr[6:9], dtype=np.float64)
-        
-        raw_data_msg_f1 = Float64MultiArray(
-            data=force_s1.flatten().tolist()
-        )
-        self.nidaq_pub_raw_s1.publish(raw_data_msg_f1)
-        
-        raw_data_msg_f2 = Float64MultiArray(
-            data=force_s2.flatten().tolist()
-        )
-        self.nidaq_pub_raw_s2.publish(raw_data_msg_f2)
-        
+        # Reader returns 12 values:
+        # [Fx1,Fy1,Fz1,Tx1,Ty1,Tz1,
+        #  Fx2,Fy2,Fz2,Tx2,Ty2,Tz2]
+        ft_s1 = np.asarray(ft_arr[0:6], dtype=np.float64)
+        ft_s2 = np.asarray(ft_arr[6:12], dtype=np.float64)
+
+        # Keep force vectors for the transformed force publishing below.
+        force_s1 = ft_s1[0:3]
+        force_s2 = ft_s2[0:3]
 
         timestamp = self.get_clock().now().to_msg()
         timestamp_sec = np.float64(
             timestamp.sec + 1e-9 * timestamp.nanosec
         )
+
+        raw_data_msg_f1 = Float64MultiArray(
+            data=np.concatenate([
+                ft_s1,
+                np.array([timestamp_sec], dtype=np.float64)
+            ]).flatten().tolist()
+        )
+        self.nidaq_pub_raw_s1.publish(raw_data_msg_f1)
+
+        raw_data_msg_f2 = Float64MultiArray(
+            data=np.concatenate([
+                ft_s2,
+                np.array([timestamp_sec], dtype=np.float64)
+            ]).flatten().tolist()
+        )
+        self.nidaq_pub_raw_s2.publish(raw_data_msg_f2)
 
         try:
             now = self.get_clock().now()

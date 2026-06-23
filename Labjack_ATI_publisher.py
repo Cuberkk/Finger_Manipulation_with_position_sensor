@@ -85,6 +85,12 @@ class LabjackATINode(Node):
             'ERIE_Manipulation/force/force_s3_raw',
             1
         )
+        
+        self.ati_pub_object_raw = self.create_publisher(
+            Float64MultiArray,
+            'ERIE_Manipulation/force/object_force_s3_raw',
+            1
+        )
 
         self.timer = self.create_timer(
             1.0 / self.publish_rate,
@@ -129,26 +135,32 @@ class LabjackATINode(Node):
                 self.get_logger().warn("No force data received from sensor 3. Skipping this sample.")
                 return
             
-            if ft_arr.size < 3:
-                self.get_logger().warn(f"Bad force data from sensor 3: expected at least 3 values, got {ft_arr.size}. Skipping this sample." )
+            if ft_arr.size < 6:
+                self.get_logger().warn(
+                    f"Bad force/torque data from sensor 3: expected 6 values, got {ft_arr.size}. Skipping this sample."
+                )
                 return
+
+            ft_s3 = np.asarray(ft_arr[:6], dtype=np.float64)
+            force_s3 = ft_s3[:3]
+
+            timestamp = self.get_clock().now().to_msg()
+            timestamp_sec = np.float64(
+                timestamp.sec + 1e-9 * timestamp.nanosec
+            )
+
+            raw_data_msg_f3 = Float64MultiArray(
+                data=np.concatenate([
+                    ft_s3,
+                    np.array([timestamp_sec], dtype=np.float64)
+                ]).flatten().tolist()
+            )
+
+            self.ati_pub_raw.publish(raw_data_msg_f3)
 
         except Exception as exc:
             self.get_logger().warn(f"Could not read force sensor 3: {exc}. Skipping this sample.")
             return
-
-        force_s3 = np.asarray(ft_arr[:3], dtype=np.float64)
-        
-        raw_data_msg_f3 = Float64MultiArray(
-            data=force_s3.flatten().tolist()
-        )
-        
-        self.ati_pub_raw.publish(raw_data_msg_f3)
-
-        timestamp = self.get_clock().now().to_msg()
-        timestamp_sec = np.float64(
-            timestamp.sec + 1e-9 * timestamp.nanosec
-        )
 
         try:
             now = self.get_clock().now()
