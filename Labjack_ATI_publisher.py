@@ -149,14 +149,14 @@ class LabjackATINode(Node):
                 timestamp.sec + 1e-9 * timestamp.nanosec
             )
 
-            raw_data_msg_f3 = Float64MultiArray(
+            force_s3_raw = Float64MultiArray(
                 data=np.concatenate([
                     ft_s3,
                     np.array([timestamp_sec], dtype=np.float64)
                 ]).flatten().tolist()
             )
 
-            self.ati_pub_raw.publish(raw_data_msg_f3)
+            self.ati_pub_raw.publish(force_s3_raw)
 
         except Exception as exc:
             self.get_logger().warn(f"Could not read force sensor 3: {exc}. Skipping this sample.")
