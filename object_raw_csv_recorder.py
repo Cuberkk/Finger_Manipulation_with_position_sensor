@@ -46,15 +46,15 @@ class ForceTrialCSVRecorder(Node):
             ),
             SensorConfig(
                 sensor_number=2,
-                finger_name="index",
-                topic=args.index_topic,
-                csv_name="object_index_raw_force.csv",
-            ),
-            SensorConfig(
-                sensor_number=3,
                 finger_name="middle",
                 topic=args.middle_topic,
                 csv_name="object_middle_raw_force.csv",
+            ),
+            SensorConfig(
+                sensor_number=3,
+                finger_name="index",
+                topic=args.index_topic,
+                csv_name="object_index_raw_force.csv",
             ),
         ]
 
@@ -226,14 +226,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Topic for sensor 1 / thumb",
     )
     parser.add_argument(
-        "--index-topic",
+        "--middle-topic",
         default="/ERIE_Manipulation/force/object_force_s2_raw",
-        help="Topic for sensor 2 / index",
+        help="Topic for sensor 2 / middle",
     )
     parser.add_argument(
-        "--middle-topic",
+        "--index-topic",
         default="/ERIE_Manipulation/force/object_force_s3_raw",
-        help="Topic for sensor 3 / middle",
+        help="Topic for sensor 3 / index",
     )
 
     return parser

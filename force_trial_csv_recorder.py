@@ -10,8 +10,8 @@ Expected topic message format from your publishers:
 
 Default topic mapping:
     sensor 1 -> thumb  -> /ERIE_Manipulation/force/force_s1_finger1
-    sensor 2 -> index  -> /ERIE_Manipulation/force/force_s2_finger2
-    sensor 3 -> middle -> /ERIE_Manipulation/force/force_s3_finger3
+    sensor 2 -> middle  -> /ERIE_Manipulation/force/force_s2_finger2
+    sensor 3 -> index -> /ERIE_Manipulation/force/force_s3_finger3
 """
 
 import argparse
@@ -61,15 +61,15 @@ class ForceTrialCSVRecorder(Node):
             ),
             SensorConfig(
                 sensor_number=2,
-                finger_name="index",
-                topic=args.index_topic,
-                csv_name="index.csv",
-            ),
-            SensorConfig(
-                sensor_number=3,
                 finger_name="middle",
                 topic=args.middle_topic,
                 csv_name="middle.csv",
+            ),
+            SensorConfig(
+                sensor_number=3,
+                finger_name="index",
+                topic=args.index_topic,
+                csv_name="index.csv",
             ),
         ]
 
@@ -241,14 +241,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Topic for sensor 1 / thumb",
     )
     parser.add_argument(
-        "--index-topic",
+        "--middle-topic",
         default="/ERIE_Manipulation/force/force_s2_finger2",
-        help="Topic for sensor 2 / index",
+        help="Topic for sensor 2 / middle",
     )
     parser.add_argument(
-        "--middle-topic",
+        "--index-topic",
         default="/ERIE_Manipulation/force/force_s3_finger3",
-        help="Topic for sensor 3 / middle",
+        help="Topic for sensor 3 / index",
     )
 
     return parser

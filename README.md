@@ -33,8 +33,8 @@ When performing PCA on combined force and torque data, `StandardScaler` is appli
 For force-only analysis, scaling is disabled to preserve the physical magnitude relationships.
 
 ## Finger Force to Finger Position Frame Calculations
-Fingers 1 & 2 refer to NIDAQ_ATI_publisher.py</br>
-Finger 3 refer to Labjack_ATI_publisher.py
+Fingers 1 & 2 refer to `NIDAQ_ATI_publisher.py` </br>
+Finger 3 refer to `Labjack_ATI_publisher.py`
 <b><i><p style= "font-size: 16px;" > Finger Force 1 to Finger  Postion 1 Rotations: </b> </br>
 </i> <p style= "font-size: 13px;" > 
 <b>F<sub>finger<sub>1</sub></sub></b>
@@ -87,8 +87,8 @@ R<sub>force<sub>3</sub>'←force<sub>3</sub></sub>(48°)
 F<sub>force<sub>3</sub></sub> </i>
 
 ## Error Calculations
-For finger to object refer to relative_rotational_error_node.py</br>
-For finger to base refer to rotational_error_node.py
+For finger to object refer to `relative_rotational_error_node.py`</br>
+For finger to base refer to `rotational_error_node.py`
 
 <b><i> <p style= "font-size: 16px;" > Calibrating Finger Postion Sensor to Object Postion Sensor Rotations: </b></br>
 </i> <p style= "font-size: 12px;" > 
