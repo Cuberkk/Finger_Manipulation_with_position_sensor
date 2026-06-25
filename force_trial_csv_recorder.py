@@ -192,14 +192,6 @@ class ForceTrialCSVRecorder(Node):
 
         print(f"Elapsed time: {elapsed_time:.2f} seconds", end='\r')
 
-    def print_status(self) -> None:
-        # self.get_logger().info(
-        #     "Samples recorded: "
-        #     f"thumb={self.counts['thumb']}, "
-        #     f"index={self.counts['index']}, "
-        #     f"middle={self.counts['middle']}"
-        # )
-        return
 
     def stop_after_duration(self) -> None:
         self.get_logger().info("Requested duration reached. Closing CSV files and stopping recorder.")

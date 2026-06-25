@@ -125,6 +125,7 @@ class LabjackATINode(Node):
         """
 
         self.total_itr += 1
+        ft_arr = self.ati_reader.stream_read()
 
         # LabJack reader returns:
         # [Fx3, Fy3, Fz3, Tx3, Ty3, Tz3]
