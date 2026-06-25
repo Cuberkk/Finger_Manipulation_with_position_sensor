@@ -125,8 +125,6 @@ class LabjackATINode(Node):
         """
 
         self.total_itr += 1
-        ft_arr = self.ati_reader.stream_read()
-
         # LabJack reader returns:
         # [Fx3, Fy3, Fz3, Tx3, Ty3, Tz3]
         try:
@@ -291,6 +289,8 @@ class LabjackATINode(Node):
         )
 
         dt = abs(now.nanoseconds - tf_stamp.nanoseconds) * 1e-9
+        if dt > self.trans_delay:
+            print(f"Transform age: {dt:.3f} seconds (too old), Data time: {tf_stamp.nanoseconds}")
         # print(f"Transform age: {dt:.3f} seconds")
 
         return dt < self.trans_delay
