@@ -160,7 +160,9 @@ class NIDAQATINode(Node):
         # [Fx1,Fy1,Fz1,Tx1,Ty1,Tz1,
         #  Fx2,Fy2,Fz2,Tx2,Ty2,Tz2]
         ft_arr = self.nidaq_reader.read()
-
+        if ft_arr is False:
+            return
+        
         # Reader returns 12 values:
         # [Fx1,Fy1,Fz1,Tx1,Ty1,Tz1,
         #  Fx2,Fy2,Fz2,Tx2,Ty2,Tz2]

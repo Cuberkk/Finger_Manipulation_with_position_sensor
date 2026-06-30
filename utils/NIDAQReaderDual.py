@@ -104,7 +104,7 @@ class NIDAQReaderDual:
             return FT_biased
         else:
             print("No samples available, returning zeros.")
-            return np.zeros(self.sensor_len,)
+            return False
         
     def compute_bias(self, time_period = 30):
         total_frames = int(self.aq_rate * time_period)
