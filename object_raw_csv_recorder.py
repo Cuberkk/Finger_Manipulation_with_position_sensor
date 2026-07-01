@@ -147,7 +147,7 @@ class ForceTrialCSVRecorder(Node):
             return
         
         fx = float(data[0])
-        fy = float(data[1])
+        fy  = float(data[1])
         fz = float(data[2])
 
         # Your publishers currently send [Fx, Fy, Fz, timestamp_sec].
@@ -163,10 +163,10 @@ class ForceTrialCSVRecorder(Node):
 
         self.writers[sensor.finger_name].writerow(
             {
-                "Fx": f"{fx:.9f}",
-                "Fy": f"{fy:.9f}",
-                "Fz": f"{fz:.9f}",
-                "source_timestamp_sec": "" if source_timestamp_sec is None else f"{source_timestamp_sec:.9f}"
+            "Fx": f"{fx:.9f}",
+            "Fy": f"{fy:.9f}",
+            "Fz": f"{fz:.9f}",
+            "source_timestamp_sec": "" if source_timestamp_sec is None else f"{source_timestamp_sec:.9f}"
             }
         )
 
