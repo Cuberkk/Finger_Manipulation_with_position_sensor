@@ -227,8 +227,6 @@ class LabjackATINode(Node):
 
             if contact is not None:
                 contact_arr = np.array([
-                    contact['theta_deg'],
-                    contact['h_mm'],
                     contact['fx'],
                     contact['fy'],
                     contact['fz'],
@@ -269,12 +267,6 @@ class LabjackATINode(Node):
 
     #(OBJECT ORGIN FRAME CHANGES)
     def rotate_to_object_origin_frame(self, force_s3, torque_s3):
-        """
-        Rotate force and torque from sensor frame into object origin frame
-        using the pre-built 42-degree rotation matrix (self.sensor_rot_x_42).
-        Since translation between frames is zero, forces and torques rotate
-        independently with the same matrix.
-        """
         force3_obj = self.sensor_rot_x_42 @ force_s3
         torque3_obj = self.sensor_rot_x_42 @ torque_s3
         return force3_obj, torque3_obj
@@ -324,11 +316,9 @@ class LabjackATINode(Node):
         fz =  fx_p * np.sin(theta) + fz_p * np.cos(theta)
 
         return {
-            'theta_deg': np.degrees(theta),
-            'h_mm':      h,
-            'fx':        fx,
-            'fy':        fy,
-            'fz':        fz,
+            'fx': fx,
+            'fy': fy,
+            'fz': fz
         }
         
     

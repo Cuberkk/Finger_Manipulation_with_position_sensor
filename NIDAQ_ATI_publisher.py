@@ -335,8 +335,6 @@ class NIDAQATINode(Node):
 
                 if contact is not None:
                     contact_arr = np.array([
-                        contact['theta_deg'],
-                        contact['h_mm'],
                         contact['fx'],
                         contact['fy'],
                         contact['fz'],
@@ -428,11 +426,9 @@ class NIDAQATINode(Node):
             fz =  fx_p * np.sin(theta) + fz_p * np.cos(theta)
 
             results[label] = {
-                'theta_deg': np.degrees(theta),
-                'h_mm':      h,
-                'fx':        fx,
-                'fy':        fy,
-                'fz':        fz,
+                'fx': fx,
+                'fy': fy,
+                'fz': fz
             }
 
         return results
