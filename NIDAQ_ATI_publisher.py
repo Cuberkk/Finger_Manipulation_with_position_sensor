@@ -71,18 +71,18 @@ class NIDAQATINode(Node):
             [0.0,                0.0,               1.0]
         ])
         
-        #(OBJECT ORGIN FRAME CHANGES)
-        sensor_origin_42 = 42.
-        sensor_origin_rad = np.deg2rad(sensor_origin_42)
-        self.sensor_rot_x_42 = np.array([
-            [np.cos(sensor_origin_rad), -np.sin(sensor_origin_rad), 0.0],
-            [np.sin(sensor_origin_rad),  np.cos(sensor_origin_rad), 0.0],
-            [0.0,                0.0,               1.0]
-        ])
+        # #(OBJECT ORGIN FRAME CHANGES)
+        # sensor_origin_42 = 42.
+        # sensor_origin_rad = np.deg2rad(sensor_origin_42)
+        # self.sensor_rot_x_42 = np.array([
+        #     [np.cos(sensor_origin_rad), -np.sin(sensor_origin_rad), 0.0],
+        #     [np.sin(sensor_origin_rad),  np.cos(sensor_origin_rad), 0.0],
+        #     [0.0,                0.0,               1.0]
+        # ])
         
-        self.finger_l = 7.3       # offset length sensoor to object origin (mm)
-        self.finger_H = 10.996    # sensor origin height (mm)
-        self.finger_R = 25.0      # object radius (mm)
+        # self.finger_l = 7.3       # offset length sensoor to object origin (mm)
+        # self.finger_H = 10.996    # sensor origin height (mm)
+        # self.finger_R = 25.0      # object radius (mm)
 
         # Precompute manual ATI force-sensor-to-object rotations.
         # sensor1: R_object_force1 = Rz(-120) @ rot_base @ Rz(48)
@@ -133,17 +133,17 @@ class NIDAQATINode(Node):
             'ERIE_Manipulation/force/force_s2_raw',
             1
         )
-        self.nidaq_pub_object_raw_s1 = self.create_publisher(
-            Float64MultiArray,
-            'ERIE_Manipulation/force/object_force_s1_raw',
-            1
-        )
+        # self.nidaq_pub_object_raw_s1 = self.create_publisher(
+        #     Float64MultiArray,
+        #     'ERIE_Manipulation/force/object_force_s1_raw',
+        #     1
+        # )
         
-        self.nidaq_pub_object_raw_s2 = self.create_publisher(
-            Float64MultiArray,
-            'ERIE_Manipulation/force/object_force_s2_raw',
-            1
-        )
+        # self.nidaq_pub_object_raw_s2 = self.create_publisher(
+        #     Float64MultiArray,
+        #     'ERIE_Manipulation/force/object_force_s2_raw',
+        #     1
+        # )
 
         self.timer = self.create_timer(
             1.0 / self.publish_rate,
@@ -197,9 +197,9 @@ class NIDAQATINode(Node):
         force_s1 = ft_s1[0:3]
         force_s2 = ft_s2[0:3]
         
-        #OBJECT ORGIN FRAME CHANGES
-        torque_s1 = ft_s1[3:6]
-        torque_s2 = ft_s2[3:6]
+        # #OBJECT ORGIN FRAME CHANGES
+        # torque_s1 = ft_s1[3:6]
+        # torque_s2 = ft_s2[3:6]
 
         timestamp = self.get_clock().now().to_msg()
         timestamp_sec = np.float64(
@@ -324,24 +324,24 @@ class NIDAQATINode(Node):
             force_s2_finger2 = rot_finger2_force_s2 @ force_s2
             
             
-            # After the existing force rotation, rotate force+torque into the
-            # object origin frame and solve for (theta, h) (CHANGE FOR OBJECT ORIGIN FRAME)
-            for force_raw, torque_raw, pub, label in [
-                (force_s1, torque_s1, self.nidaq_pub_object_raw_s1, 'sensor1'),
-                (force_s2, torque_s2, self.nidaq_pub_object_raw_s2, 'sensor2'),
-            ]:
-                f_obj, tau_obj = self.rotate_to_object_frame(force_raw, torque_raw)
-                contact = self.solve_contact_position(f_obj, tau_obj, sensor_name=label)
+            # # After the existing force rotation, rotate force+torque into the
+            # # object origin frame and solve for (theta, h) (CHANGE FOR OBJECT ORIGIN FRAME)
+            # for force_raw, torque_raw, pub, label in [
+            #     (force_s1, torque_s1, self.nidaq_pub_object_raw_s1, 'sensor1'),
+            #     (force_s2, torque_s2, self.nidaq_pub_object_raw_s2, 'sensor2'),
+            # ]:
+            #     f_obj, tau_obj = self.rotate_to_object_frame(force_raw, torque_raw)
+            #     contact = self.solve_contact_position(f_obj, tau_obj, sensor_name=label)
 
-                if contact is not None:
-                    contact_arr = np.array([
-                        contact['fx'],
-                        contact['fy'],
-                        contact['fz'],
-                        timestamp_sec
-                    ], dtype=np.float64)
+            #     if contact is not None:
+            #         contact_arr = np.array([
+            #             contact['fx'],
+            #             contact['fy'],
+            #             contact['fz'],
+            #             timestamp_sec
+            #         ], dtype=np.float64)
                     
-            pub.publish(Float64MultiArray(data=contact_arr.flatten().tolist()))
+            # pub.publish(Float64MultiArray(data=contact_arr.flatten().tolist()))
             
             # ─────────────────────────────────────────────────────────────────
             # Publish data.
@@ -362,13 +362,13 @@ class NIDAQATINode(Node):
                 # Timestamp
                 np.array([timestamp_sec], dtype=np.float64)
             ])
-            #OBJECT ORGIN FRAME CHANGES
-            msg = Float64MultiArray(data=contact_arr.flatten().tolist())
+            # #OBJECT ORGIN FRAME CHANGES
+            # msg = Float64MultiArray(data=contact_arr.flatten().tolist())
             msg_s1 = Float64MultiArray(data=data_s1.flatten().tolist())
             msg_s2 = Float64MultiArray(data=data_s2.flatten().tolist())
 
-            #OBJECT ORGIN FRAME CHANGES
-            pub.publish(msg)
+            # #OBJECT ORGIN FRAME CHANGES
+            # pub.publish(msg)
             self.nidaq_pub_s1.publish(msg_s1)
             self.nidaq_pub_s2.publish(msg_s2)
 
@@ -379,59 +379,59 @@ class NIDAQATINode(Node):
                 f"Miss rate: {self.miss_itr / self.total_itr * 100:.2f}%"
             )
 
-    #OBJECT ORIGIN FRAME CHANGES
-    def rotate_to_object_frame(self, force_s1, force_s2, torque_s1, torque_s2):
-        """
-        Rotate force and torque from sensor frame into object origin frame
-        using the 42-degree x-axis rotation matrix.
-        """
-        force1_obj  = self.sensor_rot_x_42 @ force_s1
-        torque1_obj = self.sensor_rot_x_42 @ torque_s1
-        force2_obj  = self.sensor_rot_x_42 @ force_s2
-        torque2_obj = self.sensor_rot_x_42 @ torque_s2
-        return force1_obj, torque1_obj, force2_obj, torque2_obj
+    # #OBJECT ORIGIN FRAME CHANGES
+    # def rotate_to_object_frame(self, force_s1, force_s2, torque_s1, torque_s2):
+    #     """
+    #     Rotate force and torque from sensor frame into object origin frame
+    #     using the 42-degree x-axis rotation matrix.
+    #     """
+    #     force1_obj  = self.sensor_rot_x_42 @ force_s1
+    #     torque1_obj = self.sensor_rot_x_42 @ torque_s1
+    #     force2_obj  = self.sensor_rot_x_42 @ force_s2
+    #     torque2_obj = self.sensor_rot_x_42 @ torque_s2
+    #     return force1_obj, torque1_obj, force2_obj, torque2_obj
 
-    def solve_contact_position(self, force1_obj, torque1_obj, force2_obj, torque2_obj):
-        """
-        Solve for contact position (theta, h) and finger-frame forces
-        for both sensors.
-        """
-        results = {}
+    # def solve_contact_position(self, force1_obj, torque1_obj, force2_obj, torque2_obj):
+    #     """
+    #     Solve for contact position (theta, h) and finger-frame forces
+    #     for both sensors.
+    #     """
+    #     results = {}
 
-        for f_obj, tau_obj, label in [
-            (force1_obj, torque1_obj, 'sensor1'),
-            (force2_obj, torque2_obj, 'sensor2'),
-        ]:
-            fx_p, fy_p, fz_p = f_obj
-            _,    zy_p, zz_p = tau_obj
+    #     for f_obj, tau_obj, label in [
+    #         (force1_obj, torque1_obj, 'sensor1'),
+    #         (force2_obj, torque2_obj, 'sensor2'),
+    #     ]:
+    #         fx_p, fy_p, fz_p = f_obj
+    #         _,    zy_p, zz_p = tau_obj
 
-            magnitude = self.finger_R * np.sqrt(fx_p**2 + fz_p**2)
-            if magnitude < 1e-9:
-                self.get_logger().warn(f"[{label}] fx' and fz' near zero — skipping.")
-                results[label] = None
-                continue
+    #         magnitude = self.finger_R * np.sqrt(fx_p**2 + fz_p**2)
+    #         if magnitude < 1e-9:
+    #             self.get_logger().warn(f"[{label}] fx' and fz' near zero — skipping.")
+    #             results[label] = None
+    #             continue
 
-            phi     = np.arctan2(fx_p, fz_p)
-            sin_arg = np.clip(-(fx_p * self.finger_l + zy_p) / magnitude, -1.0, 1.0)
-            theta   = np.arcsin(sin_arg) + phi
+    #         phi     = np.arctan2(fx_p, fz_p)
+    #         sin_arg = np.clip(-(fx_p * self.finger_l + zy_p) / magnitude, -1.0, 1.0)
+    #         theta   = np.arcsin(sin_arg) + phi
 
-            if abs(fx_p) < 1e-9:
-                self.get_logger().warn(f"[{label}] fx' near zero — cannot solve for h. Skipping.")
-                results[label] = None
-                continue
+    #         if abs(fx_p) < 1e-9:
+    #             self.get_logger().warn(f"[{label}] fx' near zero — cannot solve for h. Skipping.")
+    #             results[label] = None
+    #             continue
 
-            h  = self.finger_H + (zz_p - fy_p * self.finger_R * np.sin(theta)) / fx_p
-            fx =  fy_p
-            fy = -fx_p * np.cos(theta) + fz_p * np.sin(theta)
-            fz =  fx_p * np.sin(theta) + fz_p * np.cos(theta)
+    #         h  = self.finger_H + (zz_p - fy_p * self.finger_R * np.sin(theta)) / fx_p
+    #         fx =  fy_p
+    #         fy = -fx_p * np.cos(theta) + fz_p * np.sin(theta)
+    #         fz =  fx_p * np.sin(theta) + fz_p * np.cos(theta)
 
-            results[label] = {
-                'fx': fx,
-                'fy': fy,
-                'fz': fz
-            }
+    #         results[label] = {
+    #             'fx': fx,
+    #             'fy': fy,
+    #             'fz': fz
+    #         }
 
-        return results
+    #     return results
     
     def ati_force_to_object_rotation(self, sensor_name):
         """

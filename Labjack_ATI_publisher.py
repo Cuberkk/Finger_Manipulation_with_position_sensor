@@ -71,18 +71,18 @@ class LabjackATINode(Node):
         self.rot_obj_force_s3 = self.ati_force_to_object_rotation('sensor3')
         
         
-        #(OBJECT ORGIN FRAME CHANGES)
-        sensor_origin_42 = 42.
-        sensor_origin_rad = np.deg2rad(sensor_origin_42)
-        self.sensor_rot_x_42 = np.array([
-            [np.cos(sensor_origin_rad), -np.sin(sensor_origin_rad), 0.0],
-            [np.sin(sensor_origin_rad),  np.cos(sensor_origin_rad), 0.0],
-            [0.0,                0.0,               1.0]
-        ])
+        # #(OBJECT ORGIN FRAME CHANGES)
+        # sensor_origin_42 = 42.
+        # sensor_origin_rad = np.deg2rad(sensor_origin_42)
+        # self.sensor_rot_x_42 = np.array([
+        #     [np.cos(sensor_origin_rad), -np.sin(sensor_origin_rad), 0.0],
+        #     [np.sin(sensor_origin_rad),  np.cos(sensor_origin_rad), 0.0],
+        #     [0.0,                0.0,               1.0]
+        # ])
         
-        self.finger_l = 7.3       # offset length sensoor to object origin (mm)
-        self.finger_H = 10.996    # sensor origin height (mm)
-        self.finger_R = 25.0      # object radius (mm)
+        # self.finger_l = 7.3       # offset length sensoor to object origin (mm)
+        # self.finger_H = 10.996    # sensor origin height (mm)
+        # self.finger_R = 25.0      # object radius (mm)
         
 
         # ─────────────────────────────────────────────────────────────────────
@@ -101,11 +101,11 @@ class LabjackATINode(Node):
             1
         )
         
-        self.ati_pub_object_raw = self.create_publisher(
-            Float64MultiArray,
-            'ERIE_Manipulation/force/object_force_s3_raw',
-            1
-        )
+        # self.ati_pub_object_raw = self.create_publisher(
+        #     Float64MultiArray,
+        #     'ERIE_Manipulation/force/object_force_s3_raw',
+        #     1
+        # )
 
         self.timer = self.create_timer(
             1.0 / self.publish_rate,
@@ -158,8 +158,8 @@ class LabjackATINode(Node):
             ft_s3 = np.asarray(ft_arr[:6], dtype=np.float64)
             force_s3 = ft_s3[:3]
             
-            #(OBJECT ORGIN FRAME CHANGES)
-            torque_s3 = ft_s3[3:6]
+            # #(OBJECT ORGIN FRAME CHANGES)
+            # torque_s3 = ft_s3[3:6]
 
             timestamp = self.get_clock().now().to_msg()
             timestamp_sec = np.float64(
@@ -219,19 +219,19 @@ class LabjackATINode(Node):
             
             # print(f"Force sensor 3 in finger 3 position sensor frame: {force_s3_finger3[0]:.2f}, {force_s3_finger3[1]:.2f}, {force_s3_finger3[2]:.2f}")
             
-            # After the existing force rotation, rotate force+torque into the
-            # object origin frame and solve for (theta, h) (CHANGE FOR OBJECT ORIGIN FRAME)
-            force3_obj, torque3_obj = self.rotate_to_object_origin_frame(force_s3, torque_s3)
+            # # After the existing force rotation, rotate force+torque into the
+            # # object origin frame and solve for (theta, h) (CHANGE FOR OBJECT ORIGIN FRAME)
+            # force3_obj, torque3_obj = self.rotate_to_object_origin_frame(force_s3, torque_s3)
 
-            contact = self.solve_contact_position(force3_obj, torque3_obj)
+            # contact = self.solve_contact_position(force3_obj, torque3_obj)
 
-            if contact is not None:
-                contact_arr = np.array([
-                    contact['fx'],
-                    contact['fy'],
-                    contact['fz'],
-                    timestamp_sec
-                ], dtype=np.float64)
+            # if contact is not None:
+            #     contact_arr = np.array([
+            #         contact['fx'],
+            #         contact['fy'],
+            #         contact['fz'],
+            #         timestamp_sec
+            #     ], dtype=np.float64)
 
 
 
@@ -255,8 +255,8 @@ class LabjackATINode(Node):
             self.ati_pub.publish(data_msg)
             
             #(OBJECT ORGIN FRAME CHANGES)
-            contact_msg = Float64MultiArray(data=contact_arr.flatten().tolist())
-            self.ati_pub_object_raw.publish(contact_msg)
+            # contact_msg = Float64MultiArray(data=contact_arr.flatten().tolist())
+            # self.ati_pub_object_raw.publish(contact_msg)
 
         except tf2_ros.TransformException as exc:
             self.miss_itr += 1
@@ -265,61 +265,61 @@ class LabjackATINode(Node):
                 f"Miss rate: {self.miss_itr / self.total_itr * 100:.2f}%"
             )
 
-    #(OBJECT ORGIN FRAME CHANGES)
-    def rotate_to_object_origin_frame(self, force_s3, torque_s3):
-        force3_obj = self.sensor_rot_x_42 @ force_s3
-        torque3_obj = self.sensor_rot_x_42 @ torque_s3
-        return force3_obj, torque3_obj
+    # #(OBJECT ORGIN FRAME CHANGES)
+    # def rotate_to_object_origin_frame(self, force_s3, torque_s3):
+    #     force3_obj = self.sensor_rot_x_42 @ force_s3
+    #     torque3_obj = self.sensor_rot_x_42 @ torque_s3
+    #     return force3_obj, torque3_obj
     
-    #(OBJECT ORGIN FRAME CHANGES)
-    def solve_contact_position(self, force3_obj, torque3_obj):
-        """
-        Solve for contact position (theta, h) and finger-frame forces.
+    # #(OBJECT ORGIN FRAME CHANGES)
+    # def solve_contact_position(self, force3_obj, torque3_obj):
+    #     """
+    #     Solve for contact position (theta, h) and finger-frame forces.
 
-        Inputs (all in object frame):
-            f_obj   : [fx', fy', fz'] forces  (N)
-            tau_obj : [zx', zy', zz'] torques (N·mm)
+    #     Inputs (all in object frame):
+    #         f_obj   : [fx', fy', fz'] forces  (N)
+    #         tau_obj : [zx', zy', zz'] torques (N·mm)
 
-        Returns dict with:
-            theta_deg  : angular contact position around finger (degrees)
-            h_mm       : axial contact position along finger (mm)
-            fx, fy, fz : forces in finger frame (N)
-        or None if the system is degenerate (zero force).
-        """
-        fx_p, fy_p, fz_p = force3_obj
-        zx_p, zy_p, zz_p = torque3_obj
+    #     Returns dict with:
+    #         theta_deg  : angular contact position around finger (degrees)
+    #         h_mm       : axial contact position along finger (mm)
+    #         fx, fy, fz : forces in finger frame (N)
+    #     or None if the system is degenerate (zero force).
+    #     """
+    #     fx_p, fy_p, fz_p = force3_obj
+    #     zx_p, zy_p, zz_p = torque3_obj
 
-        l = self.finger_l
-        H = self.finger_H
-        Rf = self.finger_R
+    #     l = self.finger_l
+    #     H = self.finger_H
+    #     Rf = self.finger_R
 
-        # Solve for theta
-        magnitude = Rf * np.sqrt(fx_p**2 + fz_p**2)
-        if magnitude < 1e-9:
-            self.get_logger().warn("fx' and fz' near zero — cannot solve for theta. Skipping.")
-            return None
+    #     # Solve for theta
+    #     magnitude = Rf * np.sqrt(fx_p**2 + fz_p**2)
+    #     if magnitude < 1e-9:
+    #         self.get_logger().warn("fx' and fz' near zero — cannot solve for theta. Skipping.")
+    #         return None
 
-        phi     = np.arctan2(fx_p, fz_p)
-        sin_arg = np.clip(-(fx_p * l + zy_p) / magnitude, -1.0, 1.0)
-        theta   = np.arcsin(sin_arg) + phi
+    #     phi     = np.arctan2(fx_p, fz_p)
+    #     sin_arg = np.clip(-(fx_p * l + zy_p) / magnitude, -1.0, 1.0)
+    #     theta   = np.arcsin(sin_arg) + phi
 
-        # Solve for h
-        if abs(fx_p) < 1e-9:
-            self.get_logger().warn("fx' near zero — cannot solve for h. Skipping.")
-            return None
+    #     # Solve for h
+    #     if abs(fx_p) < 1e-9:
+    #         self.get_logger().warn("fx' near zero — cannot solve for h. Skipping.")
+    #         return None
 
-        h = H + (zz_p - fy_p * Rf * np.sin(theta)) / fx_p
+    #     h = H + (zz_p - fy_p * Rf * np.sin(theta)) / fx_p
 
-        # Recover finger-frame forces
-        fx =  fy_p
-        fy = -fx_p * np.cos(theta) + fz_p * np.sin(theta)
-        fz =  fx_p * np.sin(theta) + fz_p * np.cos(theta)
+    #     # Recover finger-frame forces
+    #     fx =  fy_p
+    #     fy = -fx_p * np.cos(theta) + fz_p * np.sin(theta)
+    #     fz =  fx_p * np.sin(theta) + fz_p * np.cos(theta)
 
-        return {
-            'fx': fx,
-            'fy': fy,
-            'fz': fz
-        }
+    #     return {
+    #         'fx': fx,
+    #         'fy': fy,
+    #         'fz': fz
+    #     }
         
     
     def ati_force_to_object_rotation(self, sensor_name):
