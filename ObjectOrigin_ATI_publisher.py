@@ -11,6 +11,7 @@ GEOMETRY_BY_DIAMETER_MM = {
         "finger_l": 21.778,
         "finger_H": 10.996,
         "finger_R": 26.18,
+        #add on 1.18 to accomodate for the rubber grip thickness 
     },
     80: {
         # Change these to your real 80 mm object geometry.
