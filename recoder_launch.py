@@ -25,7 +25,7 @@ def main(args):
     time.sleep(0.5)
     process2 = run_command(record_polhemus_transformed, "Polhemus transformed force recorder")
     time.sleep(0.5)
-    process3 = run_command(record_object_raw, "Object raw force recorder")
+    process3 = run_command(record_object_raw, "Object Origin raw force recorder")
     time.sleep(0.5)
 
     print("All recorders are launched.")
