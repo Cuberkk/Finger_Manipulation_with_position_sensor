@@ -94,6 +94,7 @@ R<sub>force<sub>3</sub>'←force<sub>3</sub></sub>(48°)
 F<sub>force<sub>3</sub></sub> </i>
 
 ## Finger Force to Object Origin Frame Calculations
+Refer to `ObjectOrigin_ATI_publisher.py`
 <b><i><p style="font-size: 16px;">Finger Force 1 & Torque 1 to Object Origin Frame Rotation:</b></i>
 <p style="font-size: 13px;">
 <b>F<sub>obj_origin₁</sub></b> = R<sub>obj_origin←force</sub>(42°) F<sub>force₁</sub>&nbsp;&nbsp;&nbsp; </br>
