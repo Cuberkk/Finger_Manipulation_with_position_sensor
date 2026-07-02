@@ -17,12 +17,15 @@ def run_command(command, shell_name):
 
 def main(args):
 
-    record_raw = f"source ~/.bashrc cd /home/erie_lab/Documents/kxz365/Github_repos/Finger_manipulation_with_Polhemus && python force_raw_csv_recorder.py -u {args.user_number} -s {args.diameter_mm} -t {args.task_performed} -tn {args.trial_number} --data-root {args.data_root} --duration-sec {args.duration_sec} --flush-every {args.flush_every} {'--overwrite' if args.overwrite else ''} {'--sensor-subfolders' if args.sensor_subfolders else ''}"
-    record_polhemus_transformed = f"source ~/.bashrc cd /home/erie_lab/Documents/kxz365/Github_repos/Finger_manipulation_with_Polhemus && python force_trial_csv_recorder.py -u {args.user_number} -s {args.diameter_mm} -t {args.task_performed} -tn {args.trial_number} --data-root {args.data_root} --duration-sec {args.duration_sec} --flush-every {args.flush_every} {'--sensor-subfolders' if args.sensor_subfolders else ''}"
+    record_raw = f"source ~/.bashrc && cd /home/erie_lab/Documents/kxz365/Github_repos/Finger_manipulation_with_Polhemus && python force_raw_csv_recorder.py -u {args.user_number} -s {args.diameter_mm} -t {args.task_performed} -tn {args.trial_number} --data-root {args.data_root} --duration-sec {args.duration_sec} --flush-every {args.flush_every} {'--overwrite' if args.overwrite else ''} {'--sensor-subfolders' if args.sensor_subfolders else ''}"
+    record_polhemus_transformed = f"source ~/.bashrc && cd /home/erie_lab/Documents/kxz365/Github_repos/Finger_manipulation_with_Polhemus && python force_trial_csv_recorder.py -u {args.user_number} -s {args.diameter_mm} -t {args.task_performed} -tn {args.trial_number} --data-root {args.data_root} --duration-sec {args.duration_sec} --flush-every {args.flush_every} {'--sensor-subfolders' if args.sensor_subfolders else ''}"
+    record_object_raw = f"source ~/.bashrc && cd /home/erie_lab/Documents/kxz365/Github_repos/Finger_manipulation_with_Polhemus && python force_object_csv_recorder.py -u {args.user_number} -s {args.diameter_mm} -t {args.task_performed} -tn {args.trial_number} --data-root {args.data_root} --duration-sec {args.duration_sec} --flush-every {args.flush_every} {'--overwrite' if args.overwrite else ''} {'--sensor-subfolders' if args.sensor_subfolders else ''}"
 
     process1 = run_command(record_raw, "Raw force recorder")
     time.sleep(0.5)
     process2 = run_command(record_polhemus_transformed, "Polhemus transformed force recorder")
+    time.sleep(0.5)
+    process3 = run_command(record_object_raw, "Object raw force recorder")
     time.sleep(0.5)
 
     print("All recorders are launched.")

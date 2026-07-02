@@ -9,7 +9,14 @@ Finger positioning for each finger
     <li> Index for Sensor 3</li>
     <li> Middle for Sensor 2</li>
 </ul>
+For position sensor calibration:
+<ul>
+    <li> Thumb for Sensor 1</li>
+    <li> Index for Sensor 3</li>
+    <li> Middle for Sensor 2</li>
+</ul>
 
+</br>
 For data access, please refer to:
 `data/{rotation axis}/test_{number}`
 
