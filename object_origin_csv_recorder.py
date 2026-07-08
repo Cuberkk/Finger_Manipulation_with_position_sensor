@@ -42,19 +42,19 @@ class ForceTrialCSVRecorder(Node):
                 sensor_number=1,
                 finger_name="thumb",
                 topic=args.thumb_topic,
-                csv_name="object_thumb_raw_force.csv",
+                csv_name="object_origin_thumb_force.csv",
             ),
             SensorConfig(
                 sensor_number=2,
                 finger_name="middle",
                 topic=args.middle_topic,
-                csv_name="object_middle_raw_force.csv",
+                csv_name="object_origin_middle_force.csv",
             ),
             SensorConfig(
                 sensor_number=3,
                 finger_name="index",
                 topic=args.index_topic,
-                csv_name="object_index_raw_force.csv",
+                csv_name="object_origin_index_force.csv",
             ),
         ]
 
