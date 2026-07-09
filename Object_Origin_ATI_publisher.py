@@ -1,5 +1,5 @@
 
-## ros2 run your_package object_force_geometry_node --ros-args -p diameter_mm:=50 
+## ros2 run object_force_geometry_node --ros-args -p diameter_mm:=50 
 import numpy as np
 import rclpy
 from rclpy.node import Node

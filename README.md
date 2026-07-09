@@ -3,6 +3,7 @@ Force Sensor 1(NIDAQ): FT44298 </br>
 Force Sensor 2(NIDAQ): FT45281 </br>
 Force Sensor 3(Labjack): FT44297 </br>
 
+
 Finger positioning for each finger
 <ul>
     <li> Thumb for Sensor 1</li>
