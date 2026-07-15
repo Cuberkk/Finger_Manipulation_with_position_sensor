@@ -1,5 +1,5 @@
-#ros2 topic echo /ERIE_Manipulation/object_axis_error
-#python3 object_axis_error.py
+#ros2 topic echo /ERIE_Manipulation/axis_rotational_error
+#python3 axis_rotational_error.py
 #!/usr/bin/env python3
 
 import numpy as np
@@ -14,9 +14,9 @@ from std_msgs.msg import Float64MultiArray
 from scipy.spatial.transform import Rotation as R
 
 
-class ObjectAxisErrorNode(Node):
+class AxisRotationalErrorNode(Node):
     """
-    Estimate object rotation-axis error using the object position sensor.
+    Estimate axis rotational error using the object position sensor.
 
     Main idea:
         1. Read object orientation from TF:
@@ -43,7 +43,7 @@ class ObjectAxisErrorNode(Node):
         # Frames
         # -----------------------------
         self.base_frame = "polhemus_base"
-        self.object_frame = "sensor4"
+        self.object_frame = "sensor1"
 
         # -----------------------------
         # Choose task axis
@@ -86,7 +86,7 @@ class ObjectAxisErrorNode(Node):
         # -----------------------------
         self.error_pub = self.create_publisher(
             Float64MultiArray,
-            "/ERIE_Manipulation/object_axis_error",
+            "/ERIE_Manipulation/axis_rotational_error",
             1000,
         )
 
@@ -102,7 +102,7 @@ class ObjectAxisErrorNode(Node):
         )
 
         self.get_logger().info(
-            f"Object axis error node started. Task = {self.task}, "
+            f"Axis rotational error node started. Task = {self.task}, "
             f"desired object-frame axis = {self.desired_axis_object}"
         )
 
@@ -256,7 +256,7 @@ class ObjectAxisErrorNode(Node):
 def main(args=None):
     rclpy.init(args=args)
 
-    node = ObjectAxisErrorNode()
+    node = AxisRotationalErrorNode()
 
     try:
         rclpy.spin(node)
