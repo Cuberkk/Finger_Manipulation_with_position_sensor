@@ -1,3 +1,5 @@
+#ros2 topic echo /ERIE_Manipulation/object_axis_error
+#python3 object_axis_error.py
 #!/usr/bin/env python3
 
 import numpy as np
@@ -63,10 +65,6 @@ class ObjectAxisErrorNode(Node):
             self.desired_axis_object
         )
 
-        # -----------------------------
-        # Settings
-        # -----------------------------
-        self.sample_rate = 100.0
 
         # Ignore very tiny rotations because noise can make the axis unstable.
         self.min_rotation_deg = 0.25
@@ -99,8 +97,8 @@ class ObjectAxisErrorNode(Node):
         self.R_base_object_previous = None
 
         self.timer = self.create_timer(
-            1.0 / self.sample_rate,
-            self.timer_callback,
+            1./100.,
+            self.timer_callback
         )
 
         self.get_logger().info(
