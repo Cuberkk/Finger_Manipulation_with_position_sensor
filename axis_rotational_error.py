@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 #ros2 topic echo /ERIE_Manipulation/axis_rotational_error
+#python3 object_axis_rotational_error_realtime.py --rate 50
 """
 object_axis_rotational_error_realtime.py
 
