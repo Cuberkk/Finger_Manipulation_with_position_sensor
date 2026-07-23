@@ -3,7 +3,7 @@ import time
 import argparse
 import os
 
-VALID_TASKS = ["roll", "pitch", "yaw", "finger_gating"]
+VALID_TASKS = ["roll", "pitch", "yaw", "finger_gating","single_fg"]
 VALID_DIAMETERS_MM = [50, 80]
 
 def run_command(command, shell_name):

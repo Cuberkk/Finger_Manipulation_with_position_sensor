@@ -14,7 +14,7 @@ from rclpy.node import Node
 from std_msgs.msg import Float64MultiArray
 
 
-VALID_TASKS = ["roll", "pitch", "yaw", "finger_gating"]
+VALID_TASKS = ["roll", "pitch", "yaw", "finger_gating","single_fg"]
 VALID_DIAMETERS_MM = [50, 80]
 
 
