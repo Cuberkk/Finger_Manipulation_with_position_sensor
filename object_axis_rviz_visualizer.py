@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
 
-# python3 object_axis_rviz_visualizer.py \
-#     --task roll \
-#     --diameter-mm 80 \
-#     --height-mm 120 \
-#     --axis-tolerance-deg 15 \
-#     --translation-tolerance-mm 20 \
-#     --guide-length-mm 180 \
-#     --rate 30
 """
 object_axis_rviz_visualizer.py
 
