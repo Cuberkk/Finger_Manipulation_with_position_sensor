@@ -834,23 +834,23 @@ class ObjectAxisRvizIncremental(Node):
             )
         )
 
+        # Keep the RViz text simple: show only the three axis errors and
+        # the selected task-axis error. The marker color still indicates
+        # whether the selected task error is inside or outside the tolerance.
         if axis_available:
             error_text = (
-                f"{status_word}\n"
                 f"X axis error: {x_error_deg:5.1f} deg\n"
                 f"Y axis error: {y_error_deg:5.1f} deg\n"
                 f"Z axis error: {z_error_deg:5.1f} deg\n"
                 f"{self.task.upper()} task error: "
-                f"{task_error_deg:5.1f} deg\n"
-                f"Incremental rotation: {rotation_angle_deg:5.2f} deg"
+                f"{task_error_deg:5.1f} deg"
             )
         else:
             error_text = (
-                f"{status_word}\n"
                 "X axis error: undefined\n"
                 "Y axis error: undefined\n"
                 "Z axis error: undefined\n"
-                f"Incremental rotation: {rotation_angle_deg:5.3f} deg"
+                f"{self.task.upper()} task error: undefined"
             )
 
         markers.append(
@@ -896,14 +896,14 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--diameter-mm",
         type=float,
-        default=800.0,
+        default=80.0,
         help="Cylinder diameter in millimeters. Default: 80",
     )
 
     parser.add_argument(
         "--height-mm",
         type=float,
-        default=100,
+        default=120.0,
         help="Cylinder height in millimeters. Default: 120",
     )
 
