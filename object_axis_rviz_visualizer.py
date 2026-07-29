@@ -464,7 +464,7 @@ class ObjectAxisRvizIncremental(Node):
         )
 
         marker.pose.position = self.point_message(position)
-        marker.scale.z = 0.025
+        marker.scale.z = 0.5
 
         marker.color.r = rgba[0]
         marker.color.g = rgba[1]
