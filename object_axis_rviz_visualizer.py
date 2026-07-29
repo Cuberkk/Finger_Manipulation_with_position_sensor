@@ -464,7 +464,7 @@ class ObjectAxisRvizIncremental(Node):
         )
 
         marker.pose.position = self.point_message(position)
-        marker.scale.z = 0.5
+        marker.scale.z = 0.1
 
         marker.color.r = rgba[0]
         marker.color.g = rgba[1]
@@ -910,7 +910,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--axis-tolerance-deg",
         type=float,
-        default=15.0,
+        default=30.0,
         help="Allowed half-angle around the desired axis. Default: 15",
     )
 
