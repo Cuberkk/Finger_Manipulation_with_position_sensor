@@ -1,90 +1,76 @@
 #!/usr/bin/env python3
 
 """
-object_axis_rviz_visualizer.py
+object_axis_rviz_incremental.py
 
-Live RViz2 visualization for object rotation-axis training.
+Standalone RViz2 visualizer for object rotation-axis training.
 
-What RViz displays
-------------------
-1. A transparent reference cylinder at the initial object pose.
-2. A solid current cylinder that follows sensor4 in real time.
-3. Initial and current object-frame x/y/z axes.
-4. A double tolerance cone around the desired task axis.
-5. A measured incremental rotation-axis arrow.
-6. A translation tolerance sphere centered at the initial pose.
-7. A line from the initial object center to the current center.
-8. Live text containing x/y/z axis errors and translation error.
-
-Task-axis convention
---------------------
-    roll  -> object x-axis
-    pitch -> object y-axis
-    yaw   -> object z-axis
-
-Main rotation calculation
--------------------------
-TF provides:
-
-    R_base_from_previous
-    R_base_from_current
-
-The current orientation relative to the previous object frame is:
+This version does NOT compare the object's orientation or position with the
+initial set-down pose. Instead, it calculates the relative rotation between
+the previous TF sample and the current TF sample:
 
     R_previous_from_current
         = R_base_from_previous.T @ R_base_from_current
 
-The relative rotation vector is:
+The relative rotation is converted to a rotation vector:
 
-    rotation_vector = measured_axis_previous * rotation_angle
+    rotation_vector_previous
+        = measured_axis_previous * rotation_angle
 
-The measured axis in the base frame is:
-
-    measured_axis_base
-        = R_base_from_previous @ measured_axis_previous
-
-Axis errors
------------
-For the normalized measured axis in the previous object frame:
+The measured rotation axis is compared with the x, y, and z axes of the
+PREVIOUS object frame:
 
     x_error_deg = degrees(acos(abs(axis_x)))
     y_error_deg = degrees(acos(abs(axis_y)))
     z_error_deg = degrees(acos(abs(axis_z)))
 
-The absolute value treats +axis and -axis as the same physical axis line.
+Task convention:
 
-Status colors
--------------
-    Green  -> within axis and translation tolerances
-    Red    -> outside at least one tolerance
-    Blue   -> object is nearly stationary, so the rotation axis is undefined
+    roll  -> previous object x-axis
+    pitch -> previous object y-axis
+    yaw   -> previous object z-axis
 
-Run example
------------
-    python3 object_axis_rviz_visualizer.py --task roll
+The tolerance cone follows the current cylinder position and is oriented using
+the previous object frame. Translation from the initial position is allowed and
+does not affect the status.
+
+RViz displays:
+
+1. The current cylinder pose.
+2. The current object-frame x/y/z axes.
+3. A double tolerance cone around the desired incremental rotation axis.
+4. A desired-axis arrow.
+5. A measured incremental rotation-axis arrow.
+6. Live x/y/z axis errors and task status.
+
+Run example:
+
+    python3 object_axis_rviz_incremental.py --task roll
 
 For an 80 mm diameter cylinder:
-    python3 object_axis_rviz_visualizer.py \
+
+    python3 object_axis_rviz_incremental.py \
         --task roll \
         --diameter-mm 80 \
         --height-mm 120 \
         --axis-tolerance-deg 15 \
-        --translation-tolerance-mm 20
+        --guide-length-mm 180 \
+        --rate 30
 
-Reset the reference pose:
+Reset the previous-sample reference:
+
     ros2 service call \
         /ERIE_Manipulation/reset_axis_visualization_reference \
         std_srvs/srv/Trigger "{}"
 
-RViz setup
-----------
-1. Start:
+RViz setup:
+
+1. Start RViz:
        rviz2
 2. Set Fixed Frame:
        polhemus_base
-3. Add:
-       MarkerArray
-4. Select topic:
+3. Add a MarkerArray display.
+4. Select:
        /ERIE_Manipulation/object_axis_visualization
 """
 
@@ -105,8 +91,8 @@ import tf2_ros
 from visualization_msgs.msg import Marker, MarkerArray
 
 
-class ObjectAxisRvizVisualizer(Node):
-    """Publish live object and rotation-axis guidance as RViz markers."""
+class ObjectAxisRvizIncremental(Node):
+    """Publish live incremental object rotation-axis guidance in RViz2."""
 
     def __init__(
         self,
@@ -115,11 +101,11 @@ class ObjectAxisRvizVisualizer(Node):
         diameter_mm: float,
         height_mm: float,
         axis_tolerance_deg: float,
-        translation_tolerance_mm: float,
         guide_length_mm: float,
+        minimum_rotation_deg: float,
         sensor_at_bottom: bool,
     ) -> None:
-        super().__init__("object_axis_rviz_visualizer")
+        super().__init__("object_axis_rviz_incremental")
 
         if task not in ("roll", "pitch", "yaw"):
             raise ValueError("task must be roll, pitch, or yaw")
@@ -127,10 +113,22 @@ class ObjectAxisRvizVisualizer(Node):
         if publish_rate_hz <= 0.0:
             raise ValueError("publish_rate_hz must be greater than zero")
 
+        if diameter_mm <= 0.0:
+            raise ValueError("diameter_mm must be greater than zero")
+
+        if height_mm <= 0.0:
+            raise ValueError("height_mm must be greater than zero")
+
+        if guide_length_mm <= 0.0:
+            raise ValueError("guide_length_mm must be greater than zero")
+
         if not 0.0 < axis_tolerance_deg < 89.0:
             raise ValueError(
                 "axis_tolerance_deg must be between 0 and 89 degrees"
             )
+
+        if minimum_rotation_deg <= 0.0:
+            raise ValueError("minimum_rotation_deg must be greater than zero")
 
         self.task = task
         self.publish_rate_hz = float(publish_rate_hz)
@@ -139,27 +137,27 @@ class ObjectAxisRvizVisualizer(Node):
         self.base_frame = "polhemus_base"
         self.object_frame = "sensor4"
 
-        # Object geometry in meters.
+        # Cylinder geometry in meters.
         self.object_diameter = float(diameter_mm) / 1000.0
         self.object_height = float(height_mm) / 1000.0
         self.guide_length = float(guide_length_mm) / 1000.0
 
-        # Allowed errors.
         self.axis_tolerance_deg = float(axis_tolerance_deg)
-        self.translation_tolerance = (
-            float(translation_tolerance_mm) / 1000.0
-        )
 
-        self.sensor_at_bottom = bool(sensor_at_bottom)
-
-        # Ignore tiny incremental rotations because their axis is dominated
-        # by sensor noise and is mathematically undefined at zero rotation.
-        self.minimum_rotation_deg = 0.05
+        # Below this incremental angle, the measured rotation axis is too
+        # sensitive to noise and is treated as undefined.
+        self.minimum_rotation_deg = float(minimum_rotation_deg)
         self.minimum_rotation_rad = math.radians(
             self.minimum_rotation_deg
         )
 
+        # Reject stale TF data.
         self.maximum_tf_age_sec = 1.5
+
+        # True: sensor4 is mounted at the cylinder's bottom center and its
+        # local +z axis points from the sensor toward the cylinder center.
+        # False: sensor4 is located directly at the cylinder center.
+        self.sensor_at_bottom = bool(sensor_at_bottom)
 
         self.local_axes = {
             "roll": np.array([1.0, 0.0, 0.0], dtype=np.float64),
@@ -173,34 +171,30 @@ class ObjectAxisRvizVisualizer(Node):
             "yaw": 2,
         }[self.task]
 
-        # TF.
+        # TF listener.
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(
             self.tf_buffer,
             self,
         )
 
-        # Marker output.
+        # RViz marker publisher.
         self.marker_publisher = self.create_publisher(
             MarkerArray,
             "/ERIE_Manipulation/object_axis_visualization",
             10,
         )
 
-        # Reference pose reset service.
+        # This service discards the saved previous orientation. The next valid
+        # TF sample becomes the new previous sample.
         self.reset_service = self.create_service(
             Trigger,
             "/ERIE_Manipulation/reset_axis_visualization_reference",
             self.reset_reference_callback,
         )
 
-        # Reference and previous TF values.
-        self.initial_position: Optional[np.ndarray] = None
-        self.initial_rotation: Optional[np.ndarray] = None
-        self.initial_center: Optional[np.ndarray] = None
-
+        # R_base_from_object_previous.
         self.previous_rotation: Optional[np.ndarray] = None
-
         self.reset_requested = False
 
         self.timer = self.create_timer(
@@ -209,12 +203,16 @@ class ObjectAxisRvizVisualizer(Node):
         )
 
         self.get_logger().info(
-            "RViz object-axis visualizer started."
+            "Incremental RViz object-axis visualizer started."
         )
         self.get_logger().info(
             f"Task: {self.task}; axis tolerance: "
-            f"{self.axis_tolerance_deg:.1f} deg; translation tolerance: "
-            f"{translation_tolerance_mm:.1f} mm"
+            f"{self.axis_tolerance_deg:.1f} deg; minimum rotation: "
+            f"{self.minimum_rotation_deg:.3f} deg"
+        )
+        self.get_logger().info(
+            "Rotation error is calculated from the previous and current "
+            "TF samples. Initial translation and orientation are not used."
         )
         self.get_logger().info(
             "RViz MarkerArray topic: "
@@ -232,8 +230,8 @@ class ObjectAxisRvizVisualizer(Node):
         Return the latest sensor4 position and orientation.
 
         Returns:
-            position_base: shape (3,)
-            R_base_from_object: shape (3, 3)
+            sensor_position_base: shape (3,)
+            R_base_from_object_current: shape (3, 3)
         """
         try:
             transform = self.tf_buffer.lookup_transform(
@@ -267,7 +265,7 @@ class ObjectAxisRvizVisualizer(Node):
             return None
 
         translation = transform.transform.translation
-        position = np.array(
+        sensor_position = np.array(
             [translation.x, translation.y, translation.z],
             dtype=np.float64,
         )
@@ -278,31 +276,46 @@ class ObjectAxisRvizVisualizer(Node):
             dtype=np.float64,
         )
 
-        norm = float(np.linalg.norm(quaternion))
-        if norm < 1e-12:
+        quaternion_norm = float(np.linalg.norm(quaternion))
+
+        if quaternion_norm < 1e-12:
+            self.get_logger().warning(
+                "Received a zero-length TF quaternion.",
+                throttle_duration_sec=1.0,
+            )
             return None
 
-        quaternion /= norm
-        rotation = Rotation.from_quat(quaternion).as_matrix()
+        quaternion /= quaternion_norm
+        current_rotation = Rotation.from_quat(quaternion).as_matrix()
 
-        return position, rotation
+        if not (
+            np.all(np.isfinite(sensor_position))
+            and np.all(np.isfinite(current_rotation))
+        ):
+            self.get_logger().warning(
+                "Received non-finite sensor4 TF values.",
+                throttle_duration_sec=1.0,
+            )
+            return None
+
+        return sensor_position, current_rotation
 
     def object_center(
         self,
         sensor_position: np.ndarray,
         object_rotation: np.ndarray,
     ) -> np.ndarray:
-        """
-        Convert the sensor4 position to the cylinder center.
-
-        sensor4 is mounted at the top center of the cylinder.
-        Therefore, the cylinder center is half the cylinder height
-        along the object's local -z direction.
-        """
-        local_offset = np.array(
-            [0.0, 0.0, -self.object_height / 2.0],
-            dtype=np.float64,
-        )
+        """Return the displayed cylinder center in the base frame."""
+        if self.sensor_at_bottom:
+            # sensor4 is at the bottom center. Move half the cylinder height
+            # along the object's local +z axis to reach the cylinder center.
+            local_offset = np.array(
+                [0.0, 0.0, self.object_height / 2.0],
+                dtype=np.float64,
+            )
+        else:
+            # sensor4 is already at the cylinder center.
+            local_offset = np.zeros(3, dtype=np.float64)
 
         return sensor_position + object_rotation @ local_offset
 
@@ -349,6 +362,7 @@ class ObjectAxisRvizVisualizer(Node):
 
     @staticmethod
     def axis_error_deg(axis_component: float) -> float:
+        """Return the line-angle error from one normalized axis component."""
         component = float(
             np.clip(abs(axis_component), 0.0, 1.0)
         )
@@ -373,14 +387,13 @@ class ObjectAxisRvizVisualizer(Node):
         marker.action = Marker.ADD
         marker.pose.orientation.w = 1.0
 
-        # Marker disappears if this node stops publishing.
+        # The marker disappears shortly after this node stops publishing.
         marker.lifetime = Duration(seconds=0.25).to_msg()
         return marker
 
     def cylinder_marker(
         self,
         marker_id: int,
-        namespace: str,
         center: np.ndarray,
         rotation: np.ndarray,
         rgba: Tuple[float, float, float, float],
@@ -388,7 +401,7 @@ class ObjectAxisRvizVisualizer(Node):
         marker = self.base_marker(
             marker_id,
             Marker.CYLINDER,
-            namespace,
+            "current_object",
         )
 
         marker.pose.position = self.point_message(center)
@@ -437,62 +450,6 @@ class ObjectAxisRvizVisualizer(Node):
 
         return marker
 
-    def line_marker(
-        self,
-        marker_id: int,
-        namespace: str,
-        start: np.ndarray,
-        end: np.ndarray,
-        rgba: Tuple[float, float, float, float],
-        width: float = 0.004,
-    ) -> Marker:
-        marker = self.base_marker(
-            marker_id,
-            Marker.LINE_STRIP,
-            namespace,
-        )
-
-        marker.points = [
-            self.point_message(start),
-            self.point_message(end),
-        ]
-
-        marker.scale.x = width
-
-        marker.color.r = rgba[0]
-        marker.color.g = rgba[1]
-        marker.color.b = rgba[2]
-        marker.color.a = rgba[3]
-
-        return marker
-
-    def sphere_marker(
-        self,
-        marker_id: int,
-        namespace: str,
-        center: np.ndarray,
-        diameter: float,
-        rgba: Tuple[float, float, float, float],
-    ) -> Marker:
-        marker = self.base_marker(
-            marker_id,
-            Marker.SPHERE,
-            namespace,
-        )
-
-        marker.pose.position = self.point_message(center)
-
-        marker.scale.x = diameter
-        marker.scale.y = diameter
-        marker.scale.z = diameter
-
-        marker.color.r = rgba[0]
-        marker.color.g = rgba[1]
-        marker.color.b = rgba[2]
-        marker.color.a = rgba[3]
-
-        return marker
-
     def text_marker(
         self,
         marker_id: int,
@@ -528,12 +485,7 @@ class ObjectAxisRvizVisualizer(Node):
         rgba: Tuple[float, float, float, float],
         segments: int = 48,
     ) -> Marker:
-        """
-        Construct a cone using TRIANGLE_LIST.
-
-        The apex is at the reference cylinder center. The cone opens in the
-        supplied axis direction. Its half-angle is the allowed axis error.
-        """
+        """Construct a closed cone using a TRIANGLE_LIST marker."""
         marker = self.base_marker(
             marker_id,
             Marker.TRIANGLE_LIST,
@@ -566,7 +518,7 @@ class ObjectAxisRvizVisualizer(Node):
             marker.points.append(self.point_message(current_point))
             marker.points.append(self.point_message(next_point))
 
-            # Base cap triangle.
+            # Base-cap triangle.
             marker.points.append(self.point_message(base_center))
             marker.points.append(self.point_message(next_point))
             marker.points.append(self.point_message(current_point))
@@ -594,23 +546,21 @@ class ObjectAxisRvizVisualizer(Node):
     def frame_axis_markers(
         self,
         start_id: int,
-        namespace: str,
         center: np.ndarray,
         rotation: np.ndarray,
         length: float,
-        alpha: float,
     ) -> List[Marker]:
-        """Create x, y, and z arrows for an object frame."""
+        """Create x, y, and z arrows for the current object frame."""
         colors = [
-            (1.0, 0.0, 0.0, alpha),  # x
-            (0.0, 1.0, 0.0, alpha),  # y
-            (0.0, 0.4, 1.0, alpha),  # z
+            (1.0, 0.0, 0.0, 0.95),  # x
+            (0.0, 1.0, 0.0, 0.95),  # y
+            (0.0, 0.4, 1.0, 0.95),  # z
         ]
 
         markers: List[Marker] = []
 
         for index in range(3):
-            local_axis = np.zeros(3)
+            local_axis = np.zeros(3, dtype=np.float64)
             local_axis[index] = 1.0
 
             axis_base = rotation @ local_axis
@@ -619,7 +569,7 @@ class ObjectAxisRvizVisualizer(Node):
             markers.append(
                 self.arrow_marker(
                     marker_id=start_id + index,
-                    namespace=namespace,
+                    namespace="current_frame",
                     start=center,
                     end=end,
                     rgba=colors[index],
@@ -631,7 +581,7 @@ class ObjectAxisRvizVisualizer(Node):
         return markers
 
     # ------------------------------------------------------------------
-    # Reference reset
+    # Reset service
     # ------------------------------------------------------------------
 
     def reset_reference_callback(
@@ -643,27 +593,10 @@ class ObjectAxisRvizVisualizer(Node):
         self.reset_requested = True
         response.success = True
         response.message = (
-            "The reference pose will reset on the next valid TF sample."
+            "The previous-sample reference will reset on the next valid TF "
+            "sample."
         )
         return response
-
-    def set_reference(
-        self,
-        sensor_position: np.ndarray,
-        object_rotation: np.ndarray,
-    ) -> None:
-        self.initial_position = sensor_position.copy()
-        self.initial_rotation = object_rotation.copy()
-        self.initial_center = self.object_center(
-            sensor_position,
-            object_rotation,
-        )
-        self.previous_rotation = object_rotation.copy()
-        self.reset_requested = False
-
-        self.get_logger().info(
-            "Stored a new object reference pose."
-        )
 
     # ------------------------------------------------------------------
     # Main update
@@ -681,30 +614,36 @@ class ObjectAxisRvizVisualizer(Node):
             current_rotation,
         )
 
-        if (
-            self.initial_rotation is None
-            or self.initial_center is None
-            or self.previous_rotation is None
-            or self.reset_requested
-        ):
-            self.set_reference(
-                sensor_position,
-                current_rotation,
+        # The first valid sample, or the first sample after a reset, becomes
+        # the previous orientation for the next calculation.
+        if self.previous_rotation is None or self.reset_requested:
+            self.previous_rotation = current_rotation.copy()
+            self.reset_requested = False
+            self.get_logger().info(
+                "Stored a new previous object orientation."
             )
             return
 
-        # --------------------------------------------------------------
-        # Incremental relative rotation
-        # --------------------------------------------------------------
-        relative_matrix = (
-            self.previous_rotation.T @ current_rotation
-        )
+        # Keep a local copy because self.previous_rotation is replaced at the
+        # end of this callback.
+        previous_rotation = self.previous_rotation.copy()
 
+        # --------------------------------------------------------------
+        # Relative rotation between the last two orientation samples
+        # --------------------------------------------------------------
+        #
+        # R_previous_from_current
+        #     = R_base_from_previous.T @ R_base_from_current
+        #
+        relative_matrix = previous_rotation.T @ current_rotation
         relative_rotation = Rotation.from_matrix(relative_matrix)
+
+        # rotation_vector_previous = measured_axis_previous * angle_rad
         rotation_vector_previous = relative_rotation.as_rotvec()
         rotation_angle_rad = float(
             np.linalg.norm(rotation_vector_previous)
         )
+        rotation_angle_deg = math.degrees(rotation_angle_rad)
 
         measured_axis_previous: Optional[np.ndarray] = None
         measured_axis_base: Optional[np.ndarray] = None
@@ -736,40 +675,30 @@ class ObjectAxisRvizVisualizer(Node):
             ]
             task_error_deg = all_errors[self.task_axis_index]
 
-            # Convert the axis from the previous object frame into base.
+            # Convert the measured axis from the previous object frame to the
+            # fixed polhemus_base frame for RViz display.
             measured_axis_base = (
-                self.previous_rotation @ measured_axis_previous
+                previous_rotation @ measured_axis_previous
             )
             measured_axis_base /= np.linalg.norm(
                 measured_axis_base
             )
 
-        # Desired task axis is fixed from the initial object orientation.
+        # The desired axis is taken from the PREVIOUS object orientation.
+        # It is not tied to the initial set-down orientation.
         desired_axis_base = (
-            self.initial_rotation @ self.local_axes[self.task]
+            previous_rotation @ self.local_axes[self.task]
         )
         desired_axis_base /= np.linalg.norm(desired_axis_base)
 
-        # Flip the displayed measured arrow toward the nearest side of the
-        # desired axis line. The underlying error remains directionless.
+        # The error treats +axis and -axis as the same physical axis line.
+        # Flip only the displayed measured arrow toward the closest side of
+        # the desired axis line.
         if (
             measured_axis_base is not None
             and np.dot(measured_axis_base, desired_axis_base) < 0.0
         ):
             measured_axis_base = -measured_axis_base
-
-        # --------------------------------------------------------------
-        # Translation deviation
-        # --------------------------------------------------------------
-        translation_vector = current_center - self.initial_center
-        translation_error_m = float(
-            np.linalg.norm(translation_vector)
-        )
-        translation_error_mm = 1000.0 * translation_error_m
-
-        position_ok = (
-            translation_error_m <= self.translation_tolerance
-        )
 
         axis_available = measured_axis_base is not None
         axis_ok = (
@@ -778,45 +707,32 @@ class ObjectAxisRvizVisualizer(Node):
         )
 
         if axis_available:
-            overall_ok = axis_ok and position_ok
             status_color = (
                 (0.0, 0.85, 0.15, 0.90)
-                if overall_ok
+                if axis_ok
                 else (1.0, 0.05, 0.05, 0.90)
             )
-            status_word = "GOOD" if overall_ok else "OUTSIDE GUIDE"
+            status_word = "GOOD" if axis_ok else "OUTSIDE GUIDE"
         else:
-            # A stationary object has no defined incremental rotation axis.
-            overall_ok = position_ok
+            # With essentially zero incremental rotation, there is no unique
+            # measured rotation axis.
             status_color = (0.1, 0.45, 1.0, 0.90)
             status_word = "WAITING FOR ROTATION"
 
         markers: List[Marker] = []
 
         # --------------------------------------------------------------
-        # Reference and current object cylinders
+        # Current cylinder and current object frame
         # --------------------------------------------------------------
         markers.append(
             self.cylinder_marker(
                 marker_id=0,
-                namespace="reference_object",
-                center=self.initial_center,
-                rotation=self.initial_rotation,
-                rgba=(0.65, 0.65, 0.65, 0.20),
-            )
-        )
-
-        markers.append(
-            self.cylinder_marker(
-                marker_id=1,
-                namespace="current_object",
                 center=current_center,
                 rotation=current_rotation,
                 rgba=status_color,
             )
         )
 
-        # Initial frame axes and current frame axes.
         frame_axis_length = max(
             self.object_diameter * 0.9,
             0.06,
@@ -825,35 +741,24 @@ class ObjectAxisRvizVisualizer(Node):
         markers.extend(
             self.frame_axis_markers(
                 start_id=10,
-                namespace="initial_frame",
-                center=self.initial_center,
-                rotation=self.initial_rotation,
-                length=frame_axis_length,
-                alpha=0.30,
-            )
-        )
-
-        markers.extend(
-            self.frame_axis_markers(
-                start_id=20,
-                namespace="current_frame",
                 center=current_center,
                 rotation=current_rotation,
                 length=frame_axis_length,
-                alpha=0.95,
             )
         )
 
         # --------------------------------------------------------------
-        # Desired axis tolerance double-cone
+        # Desired previous-frame task-axis tolerance cone
         # --------------------------------------------------------------
+        # The cone follows the current cylinder center, but its orientation
+        # comes from the previous sample's object frame.
         cone_color = (0.1, 0.9, 0.2, 0.16)
 
         markers.append(
             self.cone_marker(
                 marker_id=30,
                 namespace="axis_tolerance_cone_positive",
-                apex=self.initial_center,
+                apex=current_center,
                 axis=desired_axis_base,
                 length=self.guide_length,
                 half_angle_deg=self.axis_tolerance_deg,
@@ -865,7 +770,7 @@ class ObjectAxisRvizVisualizer(Node):
             self.cone_marker(
                 marker_id=31,
                 namespace="axis_tolerance_cone_negative",
-                apex=self.initial_center,
+                apex=current_center,
                 axis=-desired_axis_base,
                 length=self.guide_length,
                 half_angle_deg=self.axis_tolerance_deg,
@@ -873,14 +778,13 @@ class ObjectAxisRvizVisualizer(Node):
             )
         )
 
-        # Desired axis centerline.
         markers.append(
             self.arrow_marker(
                 marker_id=32,
                 namespace="desired_task_axis",
-                start=self.initial_center,
+                start=current_center,
                 end=(
-                    self.initial_center
+                    current_center
                     + desired_axis_base * self.guide_length
                 ),
                 rgba=(1.0, 1.0, 1.0, 0.95),
@@ -916,36 +820,7 @@ class ObjectAxisRvizVisualizer(Node):
             )
 
         # --------------------------------------------------------------
-        # Translation boundary and error line
-        # --------------------------------------------------------------
-        markers.append(
-            self.sphere_marker(
-                marker_id=50,
-                namespace="translation_tolerance",
-                center=self.initial_center,
-                diameter=2.0 * self.translation_tolerance,
-                rgba=(1.0, 0.8, 0.1, 0.10),
-            )
-        )
-
-        translation_line_color = (
-            (1.0, 0.85, 0.0, 0.9)
-            if position_ok
-            else (1.0, 0.0, 0.0, 0.95)
-        )
-
-        markers.append(
-            self.line_marker(
-                marker_id=51,
-                namespace="translation_error",
-                start=self.initial_center,
-                end=current_center,
-                rgba=translation_line_color,
-            )
-        )
-
-        # --------------------------------------------------------------
-        # Live text
+        # Live status text
         # --------------------------------------------------------------
         text_position = (
             current_center
@@ -954,7 +829,8 @@ class ObjectAxisRvizVisualizer(Node):
                     0.0,
                     0.0,
                     self.object_height * 0.85 + 0.06,
-                ]
+                ],
+                dtype=np.float64,
             )
         )
 
@@ -966,7 +842,7 @@ class ObjectAxisRvizVisualizer(Node):
                 f"Z axis error: {z_error_deg:5.1f} deg\n"
                 f"{self.task.upper()} task error: "
                 f"{task_error_deg:5.1f} deg\n"
-                f"Translation: {translation_error_mm:5.1f} mm"
+                f"Incremental rotation: {rotation_angle_deg:5.2f} deg"
             )
         else:
             error_text = (
@@ -974,7 +850,7 @@ class ObjectAxisRvizVisualizer(Node):
                 "X axis error: undefined\n"
                 "Y axis error: undefined\n"
                 "Z axis error: undefined\n"
-                f"Translation: {translation_error_mm:5.1f} mm"
+                f"Incremental rotation: {rotation_angle_deg:5.3f} deg"
             )
 
         markers.append(
@@ -990,16 +866,16 @@ class ObjectAxisRvizVisualizer(Node):
         marker_array.markers = markers
         self.marker_publisher.publish(marker_array)
 
-        # Current orientation becomes previous for the next incremental
-        # rotation calculation.
+        # The current orientation becomes the previous orientation for the
+        # next timer callback.
         self.previous_rotation = current_rotation.copy()
 
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Display live object rotation-axis and translation guidance "
-            "in RViz2."
+            "Display incremental object rotation-axis guidance in RViz2 "
+            "using the previous and current sensor4 TF samples."
         )
     )
 
@@ -1014,7 +890,7 @@ def parse_arguments() -> argparse.Namespace:
         "--rate",
         type=float,
         default=30.0,
-        help="Marker update rate in Hz. Default: 30",
+        help="Calculation and marker update rate in Hz. Default: 30",
     )
 
     parser.add_argument(
@@ -1035,28 +911,31 @@ def parse_arguments() -> argparse.Namespace:
         "--axis-tolerance-deg",
         type=float,
         default=15.0,
-        help="Allowed half-angle around desired axis. Default: 15",
-    )
-
-    parser.add_argument(
-        "--translation-tolerance-mm",
-        type=float,
-        default=20.0,
-        help="Allowed movement from initial center. Default: 20",
+        help="Allowed half-angle around the desired axis. Default: 15",
     )
 
     parser.add_argument(
         "--guide-length-mm",
         type=float,
         default=180.0,
-        help="Desired cone and axis-arrow length. Default: 180",
+        help="Tolerance cone and axis-arrow length. Default: 180",
+    )
+
+    parser.add_argument(
+        "--minimum-rotation-deg",
+        type=float,
+        default=0.05,
+        help=(
+            "Minimum incremental rotation required to calculate an axis. "
+            "Default: 0.05"
+        ),
     )
 
     parser.add_argument(
         "--sensor-at-center",
         action="store_true",
         help=(
-            "Use this only if sensor4 is at the cylinder center. "
+            "Use this only when sensor4 is located at the cylinder center. "
             "By default sensor4 is assumed to be at the bottom center."
         ),
     )
@@ -1070,7 +949,7 @@ def main(args=None) -> None:
 
     rclpy.init(args=args)
 
-    node = ObjectAxisRvizVisualizer(
+    node = ObjectAxisRvizIncremental(
         task=command_line_arguments.task,
         publish_rate_hz=command_line_arguments.rate,
         diameter_mm=command_line_arguments.diameter_mm,
@@ -1078,10 +957,10 @@ def main(args=None) -> None:
         axis_tolerance_deg=(
             command_line_arguments.axis_tolerance_deg
         ),
-        translation_tolerance_mm=(
-            command_line_arguments.translation_tolerance_mm
-        ),
         guide_length_mm=command_line_arguments.guide_length_mm,
+        minimum_rotation_deg=(
+            command_line_arguments.minimum_rotation_deg
+        ),
         sensor_at_bottom=not command_line_arguments.sensor_at_center,
     )
 
