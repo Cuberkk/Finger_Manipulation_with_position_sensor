@@ -896,14 +896,14 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--diameter-mm",
         type=float,
-        default=80.0,
+        default=800,
         help="Cylinder diameter in millimeters. Default: 80",
     )
 
     parser.add_argument(
         "--height-mm",
         type=float,
-        default=120.0,
+        default=100,
         help="Cylinder height in millimeters. Default: 120",
     )
 
