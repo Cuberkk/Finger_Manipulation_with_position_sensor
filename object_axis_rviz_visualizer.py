@@ -474,6 +474,34 @@ class ObjectAxisRvizIncremental(Node):
         marker.text = text
         return marker
 
+    def status_box_marker(
+        self,
+        marker_id: int,
+        position: np.ndarray,
+    ) -> Marker:
+        """Create a dark, semitransparent panel behind the error text."""
+        marker = self.base_marker(
+            marker_id,
+            Marker.CUBE,
+            "status_box",
+        )
+
+        marker.pose.position = self.point_message(position)
+
+        # Panel dimensions in meters. These values are sized for four lines
+        # of text with marker.scale.z = 0.10 in text_marker().
+        marker.scale.x = 0.95
+        marker.scale.y = 0.035
+        marker.scale.z = 0.55
+
+        # Dark, semitransparent background.
+        marker.color.r = 0.03
+        marker.color.g = 0.03
+        marker.color.b = 0.03
+        marker.color.a = 0.72
+
+        return marker
+
     def cone_marker(
         self,
         marker_id: int,
@@ -820,19 +848,21 @@ class ObjectAxisRvizIncremental(Node):
             )
 
         # --------------------------------------------------------------
-        # Live status text
+        # Live axis-error panel
         # --------------------------------------------------------------
-        text_position = (
-            current_center
-            + np.array(
-                [
-                    0.0,
-                    0.0,
-                    self.object_height * 0.85 + 0.06,
-                ],
-                dtype=np.float64,
-            )
+        # Keep the panel beside the cylinder in the fixed polhemus_base frame.
+        # Increase the first value to move it farther right. Make it negative
+        # to place the panel on the opposite side.
+        panel_offset_base = np.array(
+            [
+                self.object_diameter * 0.9 + 0.55,
+                0.0,
+                0.15,
+            ],
+            dtype=np.float64,
         )
+
+        panel_position = current_center + panel_offset_base
 
         # Keep the RViz text simple: show only the three axis errors and
         # the selected task-axis error. The marker color still indicates
@@ -853,10 +883,18 @@ class ObjectAxisRvizIncremental(Node):
                 f"{self.task.upper()} task error: undefined"
             )
 
+        # Draw the background first, then draw the text over it.
+        markers.append(
+            self.status_box_marker(
+                marker_id=59,
+                position=panel_position,
+            )
+        )
+
         markers.append(
             self.text_marker(
                 marker_id=60,
-                position=text_position,
+                position=panel_position,
                 text=error_text,
                 rgba=status_color,
             )
