@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """ERIE Finger Manipulation - complete researcher + participant GUI.
 
-Repository integration (checked 2026-10-09):
- https://github.com/Cuberkk/Finger_Manipulation_with_position_sensor
-
 - Sensor 1: thumb,  sensor 2: middle, sensor 3: index (repository README).
 - Subscribes to the *existing* ROS2 Float64MultiArray force topics.
 - Records selected topic set itself; DO NOT also run recoder_launch.py or
