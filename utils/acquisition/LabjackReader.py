@@ -1,3 +1,11 @@
+from pathlib import Path
+import sys
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from utils.paths import BIAS_DIR, CALIBRATION_DIR
+
 import numpy as np
 import xml.etree.ElementTree as ET
 import time
@@ -31,8 +39,8 @@ class LabjackATIReader:
         for ch, neg in zip(range(0, 12, 2), range(1, 12, 2)):
             ljm.eWriteName(self.handle, f"AIN{ch}_NEGATIVE_CH", neg)
 
-        self.bias_save_path = f"sensor_bias/bias_csv/Labjack_Bias.csv"
-        self.bias_json_path = f"sensor_bias/bias_json/Labjack_Bias.json"
+        self.bias_save_path = BIAS_DIR / "bias_csv" / "Labjack_Bias.csv"
+        self.bias_json_path = BIAS_DIR / "bias_json" / "Labjack_Bias.json"
 
         self.channels = [f"AIN{i}" for i in range(0, 12, 2)]  # AIN0,2,4,6,8,10
         self.num_channels = len(self.channels)
@@ -131,6 +139,8 @@ class LabjackATIReader:
         return FT_biased
 
     def compute_bias(self, total_frames = 30):
+        self.bias_save_path.parent.mkdir(parents=True, exist_ok=True)
+        self.bias_json_path.parent.mkdir(parents=True, exist_ok=True)
         print(f"Computing bias over {total_frames} frames")
         itr = 0
         while itr < total_frames:
@@ -159,7 +169,7 @@ class LabjackATIReader:
             pass
 
 if __name__ == "__main__":
-    lj = LabjackATIReader("calibration_files/FT44297.cal", aq_rate=60, bias_frames=5)
+    lj = LabjackATIReader(CALIBRATION_DIR / "FT44297.cal", aq_rate=60, bias_frames=5)
     try:
         while True:
             FT_lis = lj.stream_read()

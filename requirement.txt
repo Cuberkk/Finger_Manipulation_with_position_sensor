@@ -1,0 +1,33 @@
+# Python dependencies for the experiment tools and data_process notebooks.
+# Install with: python -m pip install -r requirement.txt
+# Use the Python version supported by your ROS 2 distribution.
+# Versions are not pinned: this is a dependency list, not a tested environment lock.
+
+# Numerical processing and sensor bias calculation
+numpy
+scipy
+pandas
+
+# ATI sensor acquisition Python interfaces
+nidaqmx
+labjack-ljm
+
+# Data analysis and plotting
+matplotlib
+seaborn
+scikit-learn
+
+# Notebook interface and Python kernel
+jupyterlab
+ipykernel
+
+# Install separately through ROS / the operating system / the device vendor:
+# - ROS 2: rclpy, tf2_ros, std_msgs, geometry_msgs, visualization_msgs, std_srvs.
+# - Polhemus driver/workspace providing the experiment's TF frames.
+# - NI-DAQmx native driver (the nidaqmx Python package alone is not sufficient).
+#   https://nidaqmx-python.readthedocs.io/en/latest/
+# - LabJack LJM native library (required by labjack-ljm).
+#   https://support.labjack.com/docs/python-for-ljm-windows-mac-linux
+# - Tkinter for the GUI (python3-tk on Ubuntu).
+# - GNOME Terminal for the multi-recorder launcher (gnome-terminal on Ubuntu).
+# - RViz2 for viewing the visualization node's output.

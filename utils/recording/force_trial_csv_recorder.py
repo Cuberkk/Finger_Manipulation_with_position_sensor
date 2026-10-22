@@ -24,6 +24,13 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import time
 
+# Allow direct execution as well as python -m utils.<package>.<module>.
+if __package__ in (None, ""):
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from utils.paths import DATA_DIR
+
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float64MultiArray
@@ -104,7 +111,7 @@ class ForceTrialCSVRecorder(Node):
 
     def _make_trial_dir(self, data_root: str, overwrite: bool) -> Path:
         trial_dir = (
-            Path(data_root)
+            Path(data_root).expanduser()
             / f"user_{self.user_number}"
             / f"{self.diameter_mm}mm"
             / self.task_performed
@@ -221,7 +228,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("-t", "--task-performed", required=True, choices=VALID_TASKS)
     parser.add_argument("-tn", "--trial-number", required=True, help="Trial number, e.g. 1 or 001")
 
-    parser.add_argument("--data-root", default="data", help="Root folder where data/ will be created")
+    parser.add_argument("--data-root", default=str(DATA_DIR), help="Output root (defaults to the repository data/ directory)")
     parser.add_argument("--duration-sec", type=float, default=30.0, help="Stop automatically after this many seconds. 0 means run until Ctrl+C")
     parser.add_argument("--flush-every", type=int, default=25, help="Flush each CSV after this many samples")
     parser.add_argument("-ow","--overwrite", action="store_true", help="Delete and recreate the trial folder before recording")

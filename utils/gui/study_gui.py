@@ -3,13 +3,13 @@
 
 - Sensor 1: thumb,  sensor 2: middle, sensor 3: index (repository README).
 - Subscribes to the *existing* ROS2 Float64MultiArray force topics.
-- Records selected topic set itself; DO NOT also run recoder_launch.py or
-  force_trial_csv_recorder.py into the same trial folder.
+- Records selected topic set itself; DO NOT also run utils.launch.recoder_launch or
+  utils.recording.force_trial_csv_recorder into the same trial folder.
 - Optional sensor4 TF object orientation (display only), and optional external
   three-component rotation-feedback topic (display only; no unverified ratings).
-- Demo: python3 erie_complete_study_gui.py --demo
+- Demo: python3 -m utils.gui.study_gui --demo
 - ROS2: source /opt/ros/humble/setup.bash
-        python3 erie_complete_study_gui.py
+        python3 -m utils.gui.study_gui
 
 Tkinter runs on its main thread. ROS callbacks and the CSV writer use threads.
 ROS callback receives every sample and sends it directly to the CSV worker
@@ -30,6 +30,13 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+
+# Allow direct execution as well as python -m utils.<package>.<module>.
+if __package__ in (None, ""):
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from utils.paths import DATA_DIR
 
 FINGERS = ("thumb", "middle", "index")
 STREAMS = {
@@ -337,7 +344,7 @@ class StudyApplication:
         self.trial = tk.StringVar(value="001")
         self.diameter = tk.StringVar(value="50")
         self.task = tk.StringVar(value="roll")
-        self.data_root = tk.StringVar(value=str(output or (Path(__file__).resolve().parent / "data")))
+        self.data_root = tk.StringVar(value=str(output or DATA_DIR))
         self.ready = tk.BooleanVar(value=False)
         self.consent_checked = tk.BooleanVar(value=False)
         self.require_three = tk.BooleanVar(value=True)
@@ -874,7 +881,7 @@ class StudyApplication:
 def main():
     parser = argparse.ArgumentParser(description="ERIE finger manipulation dual-window study GUI")
     parser.add_argument("--demo", action="store_true", help="Run without ROS or sensors")
-    parser.add_argument("--data-root", default=None, help="Save root (defaults to data/ adjacent to script)")
+    parser.add_argument("--data-root", default=None, help="Save root (defaults to the repository data/ directory)")
     args = parser.parse_args()
     root = tk.Tk()
     StudyApplication(root, demo=args.demo, output=args.data_root)

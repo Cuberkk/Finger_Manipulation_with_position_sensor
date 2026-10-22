@@ -209,3 +209,4 @@ __marimo__/
 
 .vscode/
 imgui.ini
+*.pdf

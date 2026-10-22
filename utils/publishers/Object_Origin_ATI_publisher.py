@@ -1,5 +1,10 @@
+# python -m utils.publishers.Object_Origin_ATI_publisher --ros-args -p diameter_mm:=50
+from pathlib import Path
+import sys
 
-## ros2 run object_force_geometry_node --ros-args -p diameter_mm:=50 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import numpy as np
 import rclpy
 from rclpy.node import Node

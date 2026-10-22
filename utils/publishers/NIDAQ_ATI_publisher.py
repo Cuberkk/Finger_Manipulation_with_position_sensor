@@ -1,3 +1,11 @@
+from pathlib import Path
+import sys
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from utils.paths import CALIBRATION_DIR
+
 import rclpy
 from rclpy.time import Time
 import tf2_ros
@@ -7,7 +15,7 @@ from std_msgs.msg import Float64MultiArray
 from scipy.spatial.transform import Rotation as R
 
 # Make sure this filename matches the file that contains your NIDAQReaderDual class.
-from utils.NIDAQReaderDual import NIDAQReaderDual
+from utils.acquisition.NIDAQReaderDual import NIDAQReaderDual
 
 
 class NIDAQATINode(Node):
@@ -19,8 +27,8 @@ class NIDAQATINode(Node):
         # NI-DAQ / ATI settings
         # ─────────────────────────────────────────────────────────────────────
 
-        self.cal1_path = 'calibration_files/FT44298.cal'
-        self.cal2_path = 'calibration_files/FT45281.cal'
+        self.cal1_path = CALIBRATION_DIR / 'FT44298.cal'
+        self.cal2_path = CALIBRATION_DIR / 'FT45281.cal'
 
         # Your NIDAQReaderDual default is usually:
         # "Dev1/ai0:7,Dev1/ai16:19"

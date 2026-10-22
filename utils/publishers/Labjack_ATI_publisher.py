@@ -1,3 +1,11 @@
+from pathlib import Path
+import sys
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from utils.paths import CALIBRATION_DIR
+
 from datetime import time
 
 import rclpy
@@ -6,7 +14,7 @@ import tf2_ros
 import numpy as np
 from rclpy.node import Node
 from std_msgs.msg import Float64MultiArray
-from utils.LabjackReader import LabjackATIReader
+from utils.acquisition.LabjackReader import LabjackATIReader
 from scipy.spatial.transform import Rotation as R
 
 
@@ -20,7 +28,7 @@ class LabjackATINode(Node):
         # LabJack ATI settings
         # ─────────────────────────────────────────────────────────────────────
 
-        self.cal_path = 'calibration_files/FT44297.cal'
+        self.cal_path = CALIBRATION_DIR / 'FT44297.cal'
         self.publish_rate = 600.0
 
         self.ati_reader = LabjackATIReader(

@@ -1,3 +1,11 @@
+from pathlib import Path
+import sys
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from utils.paths import BIAS_DIR, CALIBRATION_DIR
+
 import csv
 import json
 import pandas as pd
@@ -36,8 +44,8 @@ class NIDAQReaderDual:
             np.hstack((zero6, self.cal2))
         ))
         
-        self.bias_save_path = f"sensor_bias/bias_csv/NIDAQ_Bias.csv"
-        self.bias_json_path = f"sensor_bias/bias_json/NIDAQ_Bias.json"
+        self.bias_save_path = BIAS_DIR / "bias_csv" / "NIDAQ_Bias.csv"
+        self.bias_json_path = BIAS_DIR / "bias_json" / "NIDAQ_Bias.json"
 
         # Configure an NI Task with differential channels
         self.task = nidaqmx.Task()
@@ -107,6 +115,8 @@ class NIDAQReaderDual:
             return False
         
     def compute_bias(self, time_period = 30):
+        self.bias_save_path.parent.mkdir(parents=True, exist_ok=True)
+        self.bias_json_path.parent.mkdir(parents=True, exist_ok=True)
         total_frames = int(self.aq_rate * time_period)
         print(f"Computing bias over {time_period} seconds ({total_frames} frames at {self.aq_rate} Hz)...")
         itr = 0
@@ -137,7 +147,7 @@ class NIDAQReaderDual:
             pass
 
 if __name__ == "__main__":
-    ni = NIDAQReaderDual("calibration_files/FT44298.cal", "calibration_files/FT45281.cal", aq_rate=60, bias_time=5,)
+    ni = NIDAQReaderDual(CALIBRATION_DIR / "FT44298.cal", CALIBRATION_DIR / "FT45281.cal", aq_rate=60, bias_time=5,)
     itr = 0
     try:
         while True:

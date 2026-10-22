@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-object_axis_rviz_incremental.py
+object_axis_rviz_visualizer.py
 
 Standalone RViz2 visualizer for object rotation-axis training.
 
@@ -45,11 +45,11 @@ RViz displays:
 
 Run example:
 
-    python3 object_axis_rviz_incremental.py --task roll
+    python3 -m utils.visualization.object_axis_rviz_visualizer --task roll
 
 For an 80 mm diameter cylinder:
 
-    python3 object_axis_rviz_incremental.py \
+    python3 -m utils.visualization.object_axis_rviz_visualizer \
         --task roll \
         --diameter-mm 80 \
         --height-mm 120 \
