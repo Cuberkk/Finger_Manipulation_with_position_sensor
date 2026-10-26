@@ -16,6 +16,7 @@ from scipy.spatial.transform import Rotation as R
 
 # Make sure this filename matches the file that contains your NIDAQReaderDual class.
 from utils.acquisition.NIDAQReaderDual import NIDAQReaderDual
+from utils.publishers.wrench import rotate_wrench
 
 
 class NIDAQATINode(Node):
@@ -129,6 +130,18 @@ class NIDAQATINode(Node):
             'ERIE_Manipulation/force/force_s2_finger2',
             1
         )
+
+        # Parallel six-component topics preserve the existing force-only schema.
+        self.nidaq_pub_wrench_s1 = self.create_publisher(
+            Float64MultiArray,
+            '/ERIE_Manipulation/force/wrench_s1_finger1',
+            1
+        )
+        self.nidaq_pub_wrench_s2 = self.create_publisher(
+            Float64MultiArray,
+            '/ERIE_Manipulation/force/wrench_s2_finger2',
+            1
+        )
         
         self.nidaq_pub_raw_s1 = self.create_publisher(
             Float64MultiArray,
@@ -201,10 +214,6 @@ class NIDAQATINode(Node):
         ft_s1 = np.asarray(ft_arr[0:6], dtype=np.float64)
         ft_s2 = np.asarray(ft_arr[6:12], dtype=np.float64)
 
-        # Keep force vectors for the transformed force publishing below.
-        force_s1 = ft_s1[0:3]
-        force_s2 = ft_s2[0:3]
-        
         # #OBJECT ORGIN FRAME CHANGES
         # torque_s1 = ft_s1[3:6]
         # torque_s2 = ft_s2[3:6]
@@ -327,9 +336,12 @@ class NIDAQATINode(Node):
             rot_finger1_force_s1 = rot_obj_finger1.T @ self.rot_obj_force_s1
             rot_finger2_force_s2 = rot_obj_finger2.T @ self.rot_obj_force_s2
 
-            # Rotate force vectors into matching finger position sensor frames.
-            force_s1_finger1 = rot_finger1_force_s1 @ force_s1
-            force_s2_finger2 = rot_finger2_force_s2 @ force_s2
+            # Rotate force and torque into finger axes using the same rotation.
+            # Moments remain about each ATI sensor origin; no translation is applied.
+            wrench_s1_finger1 = rotate_wrench(rot_finger1_force_s1, ft_s1)
+            wrench_s2_finger2 = rotate_wrench(rot_finger2_force_s2, ft_s2)
+            force_s1_finger1 = wrench_s1_finger1[:3]
+            force_s2_finger2 = wrench_s2_finger2[:3]
             
             
             # # After the existing force rotation, rotate force+torque into the
@@ -379,6 +391,15 @@ class NIDAQATINode(Node):
             # pub.publish(msg)
             self.nidaq_pub_s1.publish(msg_s1)
             self.nidaq_pub_s2.publish(msg_s2)
+
+            # [Fx, Fy, Fz, Tx, Ty, Tz, timestamp_sec], with the same source
+            # timestamp as the corresponding raw and force-only messages.
+            self.nidaq_pub_wrench_s1.publish(Float64MultiArray(
+                data=np.append(wrench_s1_finger1, timestamp_sec).tolist()
+            ))
+            self.nidaq_pub_wrench_s2.publish(Float64MultiArray(
+                data=np.append(wrench_s2_finger2, timestamp_sec).tolist()
+            ))
 
         except tf2_ros.TransformException as exc:
             self.miss_itr += 1

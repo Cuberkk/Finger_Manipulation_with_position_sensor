@@ -9,12 +9,14 @@ from utils.paths import CALIBRATION_DIR
 from datetime import time
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.time import Time
 import tf2_ros
 import numpy as np
 from rclpy.node import Node
 from std_msgs.msg import Float64MultiArray
 from utils.acquisition.LabjackReader import LabjackATIReader
+from utils.publishers.wrench import rotate_wrench
 from scipy.spatial.transform import Rotation as R
 
 
@@ -23,7 +25,16 @@ class LabjackATINode(Node):
 
     def __init__(self):
         super().__init__('ati_node')
+        self.ati_reader = None
+        try:
+            self._initialize()
+        except BaseException:
+            # Construction may be interrupted during device bias or ROS setup.
+            # The caller has no node reference yet, so release resources here.
+            self.destroy_node()
+            raise
 
+    def _initialize(self):
         # ─────────────────────────────────────────────────────────────────────
         # LabJack ATI settings
         # ─────────────────────────────────────────────────────────────────────
@@ -102,6 +113,13 @@ class LabjackATINode(Node):
             'ERIE_Manipulation/force/force_s3_finger3',
             1
         )
+
+        # Parallel six-component topic preserves the existing force-only schema.
+        self.ati_pub_wrench = self.create_publisher(
+            Float64MultiArray,
+            '/ERIE_Manipulation/force/wrench_s3_finger3',
+            1
+        )
         
         self.ati_pub_raw = self.create_publisher(
             Float64MultiArray,
@@ -164,7 +182,6 @@ class LabjackATINode(Node):
                 return
 
             ft_s3 = np.asarray(ft_arr[:6], dtype=np.float64)
-            force_s3 = ft_s3[:3]
             
             # #(OBJECT ORGIN FRAME CHANGES)
             # torque_s3 = ft_s3[3:6]
@@ -220,8 +237,10 @@ class LabjackATINode(Node):
 
             rot_finger3_force_s3 = rot_finger3_obj @ self.rot_obj_force_s3
 
-            # Rotate force sensor 3 force vector into finger 3 position sensor frame.
-            force_s3_finger3 = rot_finger3_force_s3 @ force_s3
+            # Rotate force and torque into finger axes using the same rotation.
+            # Moments remain about the ATI sensor origin; no translation is applied.
+            wrench_s3_finger3 = rotate_wrench(rot_finger3_force_s3, ft_s3)
+            force_s3_finger3 = wrench_s3_finger3[:3]
 
             # force_s3_finger3 = self.sensor_rot_x_n180 @ force_s3_finger3
             
@@ -261,6 +280,12 @@ class LabjackATINode(Node):
             )
 
             self.ati_pub.publish(data_msg)
+
+            # [Fx, Fy, Fz, Tx, Ty, Tz, timestamp_sec], with the same source
+            # timestamp as the raw and force-only messages.
+            self.ati_pub_wrench.publish(Float64MultiArray(
+                data=np.append(wrench_s3_finger3, timestamp_sec).tolist()
+            ))
             
             #(OBJECT ORGIN FRAME CHANGES)
             # contact_msg = Float64MultiArray(data=contact_arr.flatten().tolist())
@@ -445,23 +470,36 @@ class LabjackATINode(Node):
             f"Miss rate: {self.miss_itr / self.total_itr * 100:.2f}%"
         )
 
+    def destroy_node(self):
+        """Release the LabJack stream before destroying ROS callbacks."""
+        reader = getattr(self, "ati_reader", None)
+        self.ati_reader = None
+        try:
+            if reader is not None:
+                reader.close()
+        except Exception as exc:
+            self.get_logger().warn(f"LabJack cleanup failed: {exc}")
+        finally:
+            super().destroy_node()
+
 
 def main(args=None):
-    rclpy.init(args=args)
-
-    node = LabjackATINode()
-
+    node = None
     try:
+        rclpy.init(args=args)
+        node = LabjackATINode()
         rclpy.spin(node)
 
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         print("Shutting down LabJack ATI Sensor 3 node...")
 
     finally:
-        node.destroy_node()
-
-        if rclpy.ok():
-            rclpy.shutdown()
+        try:
+            if node is not None:
+                node.destroy_node()
+        finally:
+            if rclpy.ok():
+                rclpy.shutdown()
 
 
 if __name__ == '__main__':

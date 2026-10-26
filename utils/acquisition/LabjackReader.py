@@ -32,7 +32,20 @@ class LabjackATIReader:
             raise RuntimeError("labjack.ljm not available. Install LabJack LJM.")
         
         self.sensor_len = 6
-        self.handle = ljm.openS("T7", "ANY", "ANY")
+        self.handle = None
+        self.stream_start = False
+        try:
+            self.handle = ljm.openS("T7", "ANY", "ANY")
+            self._configure(cal_path, aq_rate, bias_frames, bias_switch)
+        except BaseException:
+            # Ctrl+C during bias acquisition must release the handle too.
+            try:
+                self.close()
+            except Exception as exc:
+                print(f"LabJack cleanup failed during initialization: {exc}", file=sys.stderr)
+            raise
+
+    def _configure(self, cal_path, aq_rate, bias_frames, bias_switch):
         self.calibration_matrix = self._read_cal(cal_path)
 
         # Configure six differential pairs: (0-1),(2-3),(4-5),(6-7),(8-9),(10-11)
@@ -162,18 +175,38 @@ class LabjackATIReader:
             json.dump(bias_json, json_file, indent=4)
 
     def close(self):
-        """Release LabJack resources."""
+        """Stop an active stream and release the device, including partial startup."""
+        handle = getattr(self, "handle", None)
+        if handle is None:
+            return
+        self.handle = None
+        errors = []
         try:
-            ljm.close(self.handle)
-        except Exception:
-            pass
+            if getattr(self, "stream_start", False):
+                ljm.eStreamStop(handle)
+        except Exception as exc:
+            # A stream already stopped by the driver requires no further action.
+            if getattr(exc, "errorCode", None) != 2620:
+                errors.append(exc)
+        finally:
+            self.stream_start = False
+            try:
+                ljm.close(handle)
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise RuntimeError("LabJack cleanup failed: " + "; ".join(str(exc) for exc in errors)) from errors[0]
 
 if __name__ == "__main__":
-    lj = LabjackATIReader(CALIBRATION_DIR / "FT44297.cal", aq_rate=60, bias_frames=5)
+    lj = None
     try:
+        lj = LabjackATIReader(CALIBRATION_DIR / "FT44297.cal", aq_rate=60, bias_frames=5)
         while True:
             FT_lis = lj.stream_read()
             print(f"Labjack Readings: Fx: {FT_lis[0]:.2f}, Fy: {FT_lis[1]:.2f}, Fz: {FT_lis[2]:.2f}, Tx: {FT_lis[3]:.2f}, Ty: {FT_lis[4]:.2f}, Tz: {FT_lis[5]:.2f}")
             time.sleep(1 / (lj.scan_rate*2))
     except KeyboardInterrupt:
-        lj.close()
+        pass
+    finally:
+        if lj is not None:
+            lj.close()

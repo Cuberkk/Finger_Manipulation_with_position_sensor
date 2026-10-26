@@ -210,3 +210,5 @@ __marimo__/
 .vscode/
 imgui.ini
 *.pdf
+data/demo/
+tests/
