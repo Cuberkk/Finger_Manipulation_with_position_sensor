@@ -12,7 +12,7 @@ utils/
 ├── calibration/              # Position sensor rotational error nodes
 ├── visualization/            # RViz object-axis visualization
 ├── gui/                      # Researcher and participant interface
-├── object_meshes/            # Final 50mm.stl and 80mm.stl used by the GUI
+├── object_meshes/            # Final colored 50mm.glb and 80mm.glb used by the GUI
 ├── launch/                   # Multi-recorder launcher
 ├── config/calibration_files/ # ATI .cal files
 └── paths.py                  # Shared repository, data, and calibration paths
@@ -24,7 +24,7 @@ data/
 └── analysis_results/         # PCA figures and other analysis outputs
 data_process/                # Single-trial and multi-trial analysis notebooks
 docs/images/                 # Protocol reference images
-docs/mesh_sources/           # Archived original high-resolution STL models
+docs/mesh_sources/           # Original GLB exports, original STLs, and legacy display assets
 ```
 
 Existing experiment folders under `data/` retain their layout.
@@ -98,18 +98,20 @@ Edit the minute values and restart the GUI to change rest durations, or use `--r
 
 Counting requires a complete rotation cycle: **neutral → negative target → neutral → positive target → neutral**. The researcher can adjust the default targets of ±30°, neutral band of ±5°, and 0.12-second hold requirement. The trial stops automatically at 20 cycles; stopping early also saves the recorded data. Tracking interruptions discard an unfinished cycle while retaining completed cycles. The `G` / finger-gating task currently uses the researcher's manual `+1` count pending a defined automatic counting rule.
 
-For example, `80R0` means the 80 mm object, Roll, repetition 0; it is displayed as `Task 1/5`. Move the participant window to its own monitor if needed. Both windows scale their fonts independently when resized or maximized using the window controls. F11 toggles fullscreen in either window; Escape leaves fullscreen. Restoring the window size restores its font sizes.
+For example, `80R0` means the 80 mm object, Roll, repetition 0; it is displayed as `Task 1/5`. Both windows start in normal windowed mode. F11 toggles fullscreen in the focused window; Escape exits fullscreen. Move the participant window to its own monitor if needed. Both windows scale their fonts independently with their window size. The digital twin uses the same additional **1.30× uniform display scale** for the 50 mm and 80 mm models, including their reference axes. This display enlargement preserves model proportions and the original rotation origin. Restoring the window size restores its font sizes.
 
 The advisor's three charts show Thumb, Index, and Middle, each with six signed bars and separate force/torque scales. By default, starting a trial requires fresh sensor-4 tracking and all three six-component F/T streams. Interrupted or missing F/T data and recorder queue overflows are flagged for review; stale bars are not presented as current measurements.
 
-`utils/object_meshes/` contains only the two final meshes used by the GUI: `50mm.stl` and `80mm.stl`, with corrected winding/normals and prepared display geometry. The original high-resolution models are archived in `docs/mesh_sources/`. Runtime loading uses the final files directly. To regenerate either final mesh from its archived source:
+`utils/object_meshes/` contains only the two final colored models used by the GUI: `50mm.glb` and `80mm.glb`. They retain the six material colors and eleven parts from the original Onshape exports in `docs/mesh_sources/`. Geometry preparation simplifies each part/material region independently and checks topology, material assignments, scene origin, and physical bounds before installing the result. To regenerate either final model:
 
 ```bash
-python -m utils.gui.mesh_repair docs/mesh_sources/50mm_original.stl utils/object_meshes/50mm.stl --overwrite
-python -m utils.gui.mesh_repair docs/mesh_sources/80mm_original.stl utils/object_meshes/80mm.stl --overwrite
+python -m utils.gui.glb_prepare docs/mesh_sources/50mm.glb utils/object_meshes/50mm.glb --overwrite
+python -m utils.gui.glb_prepare docs/mesh_sources/80mm.glb utils/object_meshes/80mm.glb --overwrite
 ```
 
-The preparation command saves one final STL and preserves its source. Preparing dense meshes requires VTK, available in the system Python environment on this workstation. VTK is only needed for preparation; the GUI continues to use Tkinter and NumPy at runtime.
+The preparation command saves one final GLB and preserves its source. Preparing dense models requires VTK, available in the system Python environment on this workstation. VTK is only needed for preparation; the GUI uses Tkinter, NumPy, and Python's standard library at runtime. The current loader supports uncompressed GLB geometry with flat material colors. The previous display STLs are archived under `docs/mesh_sources/legacy_display/`; standalone STL loading and the `utils.gui.mesh_repair` preparation command remain available for legacy models.
+
+Reference axes start at the model's original scene `(0, 0, 0)`, and orientation rotates around this same origin. Camera framing uses a separate display offset; it does not replace the model origin with its bounding-box center. GLB metre coordinates are converted to millimetres while preserving the exported XYZ orientation. Reference arrows are thicker, with additional emphasis on the task's target axis. Trial metadata records the actual model path and its origin.
 
 GUI configuration options:
 
@@ -119,7 +121,7 @@ GUI configuration options:
 | `--data-root` | Override the save root; live mode defaults to repository `data/` |
 | `--protocol` | Override the trial lookup CSV |
 | `--rest-config` | Rest_Time.py-style configuration; values are minutes |
-| `--mesh-dir` | Directory containing the 50 mm and 80 mm STL models |
+| `--mesh-dir` | Directory containing prepared 50 mm and 80 mm GLB models; legacy STL is supported |
 | `--timezone` | Time zone used for session and trial folder timestamps |
 | `--mesh-alignment-rpy RX RY RZ` | Mesh-to-sensor-4 alignment in degrees, with `A = Rz @ Ry @ Rx`; default is identity |
 

@@ -1,9 +1,9 @@
-"""A small Tk renderer for the experiment's actual STL object meshes.
+"""A small Tk renderer for the experiment's colored GLB and legacy STL meshes.
 
-STL coordinates are kept in their original XYZ order.  ``set_pose`` takes the
+Model coordinates are kept in their original XYZ order.  ``set_pose`` takes the
 rotation from those local axes into the caller's reference frame.  Centering,
 uniform display scaling, and the fixed viewing camera are separate operations.
-Each STL is a standalone, normals-corrected display asset.
+The original model origin remains the pose pivot and the reference-axis origin.
 """
 from __future__ import annotations
 
@@ -16,10 +16,12 @@ import numpy as np
 
 
 from .mesh_repair import MAX_DISPLAY_FACES, load_stl, repair_normals
+from .glb_mesh import load_glb
 
 BACKGROUND = "#FFFFFF"
 AXIS_COLORS = {"x": "#BB3445", "y": "#197D58", "z": "#2464BD"}
 TARGET_COLOR = "#A96300"
+MODEL_SCALE_FACTOR = 1.30
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,14 @@ class MeshGeometry:
     center: np.ndarray
     radius: float
     source_face_count: int
+    origin: np.ndarray
+    face_colors: np.ndarray | None = None
+
+
+def mesh_asset_path(mesh_dir: Path, diameter: int) -> Path:
+    """Prefer the current colored asset; permit standalone legacy STL models."""
+    colored = Path(mesh_dir) / f"{int(diameter)}mm.glb"
+    return colored if colored.is_file() else Path(mesh_dir) / f"{int(diameter)}mm.stl"
 
 
 def prepare_mesh(triangles: np.ndarray, max_faces: int = MAX_DISPLAY_FACES) -> MeshGeometry:
@@ -55,6 +65,7 @@ def prepare_mesh(triangles: np.ndarray, max_faces: int = MAX_DISPLAY_FACES) -> M
         raise ValueError("STL has zero extent")
     center = (bounds[0] + bounds[1]) * 0.5
     vertices = vertices - center
+    origin = -center
     corners = vertices[faces]
     normals = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])
     lengths = np.linalg.norm(normals, axis=1)
@@ -64,9 +75,9 @@ def prepare_mesh(triangles: np.ndarray, max_faces: int = MAX_DISPLAY_FACES) -> M
     if not len(faces):
         raise ValueError("STL contains no non-degenerate triangles")
     radius = float(np.linalg.norm(triangles.reshape(-1, 3) - center, axis=1).max())
-    for array in (vertices, faces, normals, bounds, center):
+    for array in (vertices, faces, normals, bounds, center, origin):
         array.setflags(write=False)
-    return MeshGeometry(vertices, faces, normals, bounds, center, radius, len(triangles))
+    return MeshGeometry(vertices, faces, normals, bounds, center, radius, len(triangles), origin)
 
 
 @lru_cache(maxsize=8)
@@ -80,9 +91,38 @@ def _cached_geometry(triangle_bytes: bytes) -> MeshGeometry:
 
 
 def load_mesh(path: Path) -> MeshGeometry:
-    """Load a standalone STL; NumPy is the only mesh dependency."""
+    """Load a prepared colored GLB or a standalone legacy STL."""
+    if Path(path).suffix.lower() == ".glb":
+        return _prepared_glb_geometry(load_glb(path))
     triangles = load_stl(Path(path))
     return _cached_geometry(triangles.tobytes())
+
+
+@lru_cache(maxsize=8)
+def _prepared_glb_geometry(source) -> MeshGeometry:
+    if len(source.faces) > MAX_DISPLAY_FACES:
+        raise ValueError("Dense GLB requires preparation: run "
+                         "python -m utils.gui.glb_prepare <source.glb> <display.glb>")
+    # This is only a display translation. Origin tracks source (0, 0, 0),
+    # and both geometry and axes rotate about that point, not the bounds center.
+    vertices = source.vertices - source.center
+    origin = source.origin - source.center
+    for array in (vertices, origin):
+        array.setflags(write=False)
+    return MeshGeometry(vertices, source.faces, source.normals, source.bounds,
+                        source.center, source.radius, len(source.faces), origin, source.face_colors)
+
+
+def material_palette(linear_rgba: np.ndarray) -> list[str]:
+    """Shade glTF linear base colors, then convert to Tk's sRGB colors."""
+    color = np.asarray(linear_rgba, dtype=float)
+    levels = .34 + np.linspace(0, 1, 64)[:, None] * .73
+    linear = np.clip(color[:3] * levels, 0, 1)
+    srgb = np.where(linear <= .0031308, 12.92 * linear, 1.055 * linear ** (1 / 2.4) - .055)
+    alpha = color[3] if len(color) == 4 else 1.0
+    srgb = srgb * alpha + (1 - alpha)  # White participant background.
+    rgb = np.rint(srgb * 255).astype(int)
+    return ["#%02x%02x%02x" % tuple(row) for row in rgb]
 
 
 def camera_matrix() -> np.ndarray:
@@ -96,9 +136,9 @@ def camera_matrix() -> np.ndarray:
 
 
 class MeshView(tk.Canvas):
-    """Real STL orientation display.  Call its methods from the Tk thread.
+    """Colored model orientation display. Call its methods from the Tk thread.
 
-    ``rotation`` maps STL-local vectors to the caller's reference coordinates.
+    ``rotation`` maps model-local vectors to the caller's reference coordinates.
     ``None`` holds the last supplied rotation; ``tracking=False`` labels that
     hold explicitly.  Target axes accept x/y/z, or roll/pitch/yaw aliases.
     ``error`` is None on success and a readable string on mesh/pose failures.
@@ -127,11 +167,14 @@ class MeshView(tk.Canvas):
         self._visible_count = 0
         self._pending_render = None
         self._palette = [self._surface_color(level / 63) for level in range(64)]
-        self._cue = self.create_line(0, 0, 1, 1, fill=TARGET_COLOR, width=2,
-                                     arrow=tk.LAST, arrowshape=(10, 12, 5), state=tk.HIDDEN)
+        self._material_palettes = None
+        self._face_palette = None
+        self._cue = self.create_line(0, 0, 1, 1, fill=TARGET_COLOR, width=4,
+                                     arrow=tk.LAST, arrowshape=(16, 20, 7), state=tk.HIDDEN)
         self._axis_lines = {axis: self.create_line(
-            0, 0, 1, 1, fill=color, width=2, arrow=tk.LAST, arrowshape=(9, 11, 4)
+            0, 0, 1, 1, fill=color, width=4, arrow=tk.LAST, arrowshape=(13, 17, 6)
         ) for axis, color in AXIS_COLORS.items()}
+        self._origin_marker = self.create_oval(0, 0, 1, 1, fill="#17273D", outline="white", width=1.5)
         self._axis_labels = {axis: self.create_text(
             0, 0, text=axis.upper(), fill=color, font=("TkDefaultFont", 12, "bold")
         ) for axis, color in AXIS_COLORS.items()}
@@ -154,13 +197,18 @@ class MeshView(tk.Canvas):
             return
         self.diameter = diameter
         try:
-            path = self.mesh_dir / f"{diameter}mm.stl"
+            path = mesh_asset_path(self.mesh_dir, diameter)
             self.source_path = path.resolve()
             self.geometry = load_mesh(path)
+            if self.geometry.face_colors is None:
+                self._material_palettes = self._face_palette = None
+            else:
+                colors, self._face_palette = np.unique(self.geometry.face_colors, axis=0, return_inverse=True)
+                self._material_palettes = [material_palette(color) for color in colors]
             self._mesh_error = None
         except (OSError, ValueError) as exc:
             self.geometry = None
-            self._mesh_error = f"Unable to load {diameter} mm STL\n{exc}"
+            self._mesh_error = f"Unable to load {diameter} mm model\n{exc}"
         self.error = self._mesh_error or self._pose_error
         self._schedule_render()
 
@@ -213,7 +261,8 @@ class MeshView(tk.Canvas):
             self._pending_render = None
 
     def _project(self, points, transform, center, scale):
-        camera = np.asarray(points) @ transform.T
+        origin = self.geometry.origin
+        camera = (np.asarray(points) - origin) @ transform.T + origin @ self._camera.T
         return camera[:, :2] * [scale, -scale] + center
 
     def _render(self):
@@ -225,7 +274,7 @@ class MeshView(tk.Canvas):
         self.coords(self._message, *center)
         self.itemconfigure(self._message, width=max(80, width - 56))
         if self.geometry is None:
-            for item in self._triangles + list(self._axis_lines.values()) + list(self._axis_labels.values()) + [self._cue]:
+            for item in self._triangles + list(self._axis_lines.values()) + list(self._axis_labels.values()) + [self._cue, self._origin_marker]:
                 self.itemconfigure(item, state=tk.HIDDEN)
             self._visible_count = 0
             self.itemconfigure(self._message, text=self._mesh_error or "Select an object size", state=tk.NORMAL)
@@ -233,9 +282,12 @@ class MeshView(tk.Canvas):
             return
         self.itemconfigure(self._message, state=tk.HIDDEN)
         mesh = self.geometry
-        scale = max(1.0, min(width * 0.35, height * 0.34)) / mesh.radius
+        # Fit both the rotating source geometry and axes around its true origin.
+        source_radius = float(np.linalg.norm(mesh.vertices - mesh.origin, axis=1).max())
+        fit_radius = max(source_radius, mesh.radius * 1.4) + float(np.linalg.norm(mesh.origin))
+        scale = MODEL_SCALE_FACTOR * max(1.0, min(width * .44, height * .43)) / fit_radius
         transform = self._camera @ self._rotation
-        camera_vertices = mesh.vertices @ transform.T
+        camera_vertices = (mesh.vertices - mesh.origin) @ transform.T + mesh.origin @ self._camera.T
         projected = camera_vertices[:, :2] * [scale, -scale] + center
         corners = projected[mesh.faces]
         normals = mesh.normals @ transform.T
@@ -262,32 +314,40 @@ class MeshView(tk.Canvas):
         # faces to those slots, instead of rebuilding or raising every polygon.
         for index, face in enumerate(order):
             self.coords(self._triangles[index], *corners[face].ravel())
-            fill = self._palette[levels[face]]
+            fill = (self._palette[levels[face]] if self._material_palettes is None else
+                    self._material_palettes[self._face_palette[face]][levels[face]])
             if self._fills[index] != fill:
                 self.itemconfigure(self._triangles[index], fill=fill)
                 self._fills[index] = fill
         self._render_axes(transform, center, scale)
         status = self._pose_error or ("" if self._tracking else "Orientation unavailable · holding view")
         self.itemconfigure(self._status, text=status)
-        for item in [self._cue, *self._axis_lines.values(), *self._axis_labels.values(),
+        for item in [self._cue, *self._axis_lines.values(), self._origin_marker, *self._axis_labels.values(),
                      self._status, self._message]:
             self.tag_raise(item)
 
     def _render_axes(self, transform, center, scale):
         radius = self.geometry.radius
+        origin = self.geometry.origin
+        s = self._font_scale
         for index, axis in enumerate(("x", "y", "z")):
             direction = np.eye(3)[index]
-            points = np.stack((direction * radius * 0.12, direction * radius * 1.17))
+            points = np.stack((origin, origin + direction * radius * 1.17))
             coordinates = self._project(points, transform, center, scale)
             selected = axis == self._target_axis
             self.coords(self._axis_lines[axis], *coordinates.ravel())
             self.itemconfigure(self._axis_lines[axis], state=tk.NORMAL,
                                fill=TARGET_COLOR if selected else AXIS_COLORS[axis],
-                               width=4 if selected else 2)
-            label_point = self._project([direction * radius * 1.32], transform, center, scale)[0]
+                               width=(8 if selected else 4) * s,
+                               arrowshape=tuple(value * s for value in ((18, 22, 8) if selected else (13, 17, 6))))
+            label_point = self._project([origin + direction * radius * 1.32], transform, center, scale)[0]
             self.coords(self._axis_labels[axis], *label_point)
             self.itemconfigure(self._axis_labels[axis], state=tk.NORMAL,
                                fill=TARGET_COLOR if selected else AXIS_COLORS[axis])
+        projected_origin = self._project([origin], transform, center, scale)[0]
+        marker_radius = 3.5 * s
+        self.coords(self._origin_marker, *(projected_origin - marker_radius), *(projected_origin + marker_radius))
+        self.itemconfigure(self._origin_marker, state=tk.NORMAL, width=1.5 * s)
         if self._target_axis is None:
             self.itemconfigure(self._cue, state=tk.HIDDEN)
             return
@@ -296,6 +356,7 @@ class MeshView(tk.Canvas):
         basis_a = np.eye(3)[(axis + 1) % 3]
         basis_b = np.eye(3)[(axis + 2) % 3]
         angles = np.linspace(np.deg2rad(20), np.deg2rad(325), 55)
-        ring = radius * 0.92 * (np.cos(angles[:, None]) * basis_a + np.sin(angles[:, None]) * basis_b)
+        ring = origin + radius * 0.92 * (np.cos(angles[:, None]) * basis_a + np.sin(angles[:, None]) * basis_b)
         self.coords(self._cue, *self._project(ring, transform, center, scale).ravel())
-        self.itemconfigure(self._cue, state=tk.NORMAL)
+        self.itemconfigure(self._cue, state=tk.NORMAL, width=4 * s,
+                           arrowshape=tuple(value * s for value in (16, 20, 7)))

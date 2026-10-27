@@ -21,7 +21,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from utils.paths import DATA_DIR, PROJECT_ROOT
-from utils.gui.mesh_view import MeshView
+from utils.gui.mesh_view import MeshView, mesh_asset_path
 from utils.gui.responsive import ResponsiveFonts
 from utils.gui.rest import RestCountdown, load_rest_times
 from utils.gui.rest_view import RestCountdownView
@@ -608,7 +608,8 @@ class StudyApplication:
                         "data_recorded": recording_enabled, "demo_cycle_count_skipped": False,
                         "target_cycles": 20, "target_deg": self.counter.target_deg, "neutral_deg": self.counter.neutral_deg,
                         "dwell_sec": self.counter.dwell_sec, "count_mode": "automatic_rotation" if self.trial.axis else "manual_gaiting",
-                        "mesh": str(self.args.mesh_dir / f"{self.trial.diameter_mm}mm.stl"),
+                        "mesh": str(mesh_asset_path(self.args.mesh_dir, self.trial.diameter_mm)),
+                        "mesh_origin_xyz": [0.0, 0.0, 0.0], "mesh_coordinate_unit": "mm",
                         "mesh_to_sensor4_matrix": self.alignment.tolist(), "baseline_xyzw": list(self.baseline),
                         "baseline_source_timestamp_sec": pose.source_timestamp,
                         "orientation_tf": {"parent": "polhemus_base", "child": "sensor4"},
@@ -972,10 +973,11 @@ def parse_args(argv=None):
     parser.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "docs/user_study_docs/Trials_lookup.csv")
     parser.add_argument("--rest-config", type=Path, default=PROJECT_ROOT / "docs/user_study_docs/Rest_Time.py",
                         help="Rest durations in minutes: trials, tasks, objects.")
-    parser.add_argument("--mesh-dir", type=Path, default=PROJECT_ROOT / "utils/object_meshes")
+    parser.add_argument("--mesh-dir", type=Path, default=PROJECT_ROOT / "utils/object_meshes",
+                        help="Prepared 50mm/80mm GLB models; legacy STL is also supported.")
     parser.add_argument("--timezone", default="America/New_York", help="Timezone for session and trial folder names.")
     parser.add_argument("--mesh-alignment-rpy", type=float, nargs=3, default=(0, 0, 0), metavar=("RX", "RY", "RZ"),
-                        help="Degrees; Rz Ry Rx maps STL axes into sensor 4 axes (default: aligned).")
+                        help="Degrees; Rz Ry Rx maps model axes into sensor 4 axes (default: aligned).")
     args = parser.parse_args(argv)
     args.data_root = (args.data_root or (DATA_DIR / "demo" if args.demo else DATA_DIR)).expanduser().resolve()
     args.protocol = args.protocol.expanduser().resolve()
