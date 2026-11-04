@@ -2,7 +2,6 @@
 
 from pathlib import Path
 import sys
-import time
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -15,6 +14,7 @@ from std_msgs.msg import Float64MultiArray
 
 from utils.paths import CALIBRATION_DIR
 from utils.acquisition.NIDAQReaderDual import NIDAQReaderDual
+from utils.acquisition.source_clock import source_time
 
 
 class NIDAQATINode(Node):
@@ -62,7 +62,7 @@ class NIDAQATINode(Node):
             ft_arr = self.nidaq_reader.read()
             # Wall time at read completion, independent of ROS /clock.
             # This is not a hardware acquisition timestamp.
-            timestamp_sec = time.time()
+            timestamp_sec = source_time()
             if ft_arr is False:
                 return
             values = np.asarray(ft_arr, dtype=np.float64)

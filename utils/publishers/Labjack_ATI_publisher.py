@@ -2,7 +2,6 @@
 
 from pathlib import Path
 import sys
-import time
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -15,6 +14,7 @@ from std_msgs.msg import Float64MultiArray
 
 from utils.paths import CALIBRATION_DIR
 from utils.acquisition.LabjackReader import LabjackATIReader
+from utils.acquisition.source_clock import source_time
 
 
 class LabjackATINode(Node):
@@ -53,7 +53,7 @@ class LabjackATINode(Node):
             ft_arr = self.ati_reader.stream_read()
             # Wall time at read completion, independent of ROS /clock.
             # This is not a hardware acquisition timestamp.
-            timestamp_sec = time.time()
+            timestamp_sec = source_time()
             if ft_arr is None:
                 return
             values = np.asarray(ft_arr, dtype=np.float64)

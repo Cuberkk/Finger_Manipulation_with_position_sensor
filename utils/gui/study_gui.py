@@ -344,7 +344,7 @@ class StudyApplication:
         p.geometry("1000x850+160+90")
         p.minsize(720, 650)
         p.configure(bg=PARTICIPANT_BG)
-        p.protocol("WM_DELETE_WINDOW", p.withdraw)
+        p.protocol("WM_DELETE_WINDOW", self.close)
         p.bind("<KeyPress-space>", self.participant_space_pressed)
         p.bind("<KeyRelease-space>", self.participant_space_released)
         p.bind("<FocusOut>", self._release_participant_space, add="+")

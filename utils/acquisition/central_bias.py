@@ -126,8 +126,19 @@ class CentralBiasManager:
         if abs(now_wall - stamp) > self.max_age:
             self.last_rejection = f"sensor{sensor}: stale/future source timestamp; check clock synchronization"
             return None
-        if stamp <= self._last_stamps.get(sensor, -math.inf):
-            self.last_rejection = f"sensor{sensor}: duplicate or out-of-order source timestamp"
+        previous = self._last_stamps.get(sensor)
+        if previous is not None and stamp <= previous:
+            if stamp == previous:
+                self.last_rejection = (
+                    f"sensor{sensor}: duplicate source timestamp {stamp:.9f}; "
+                    "check acquisition clock resolution and duplicate publishers"
+                )
+            else:
+                self.last_rejection = (
+                    f"sensor{sensor}: out-of-order source timestamp {stamp:.9f} "
+                    f"< {previous:.9f} (backwards by {(previous - stamp) * 1000:.3f} ms); "
+                    "check source clock changes and duplicate publishers"
+                )
             return None
         self._last_stamps[sensor] = stamp
         self._latest[sensor] = (stamp, float(now_monotonic))

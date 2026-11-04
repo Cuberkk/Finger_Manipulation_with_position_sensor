@@ -139,6 +139,21 @@ preserves that source timestamp in all outputs; it never replaces it with Linux
 receipt time. Current source timestamps represent acquisition-host read completion,
 not hardware clock timestamps or guaranteed simultaneous hardware sampling.
 
+On Windows, acquisition publishers use the high-resolution UTC system clock
+`GetSystemTimePreciseAsFileTime`, including on older Python versions whose
+`time.time()` clock can repeat across adjacent samples. Linux uses its regular
+system clock. Neither path fabricates increasing timestamps, so actual clock
+steps remain visible. Update the Windows repository and restart NI-DAQ to load
+this timestamp fix; no Python/ROS environment upgrade is required.
+
+The processor distinguishes duplicate timestamps from timestamps that move
+backwards, reports their values, and rejects either case. Warning messages are
+throttled at one shared logging call site to at most once every five seconds;
+that interval does not indicate the actual rejection rate or imply only the
+named sensor is affected. For recurring warnings, check the source clock and
+confirm each acquisition topic has exactly one publisher with
+`ros2 topic info /ERIE_Manipulation/acquisition/wrench_s1_uncorrected -v`.
+
 Windows and Linux must still have synchronized system clocks and a shared ROS 2
 domain/network. Stale/future timestamps and duplicate/out-of-order samples are
 rejected. The processor retries source-time TF lookups using bounded queues;
@@ -217,7 +232,7 @@ In **demo mode**, the advisor has a **DEMO · DATA SAVING** row directly below t
 
 Demo participants can use **Space** to move through stages quickly: during the five-second preparation countdown it starts the trial immediately; during cycle counting it finishes the trial as `demo_skipped`; during rest it skips the remaining rest and opens the next preparation countdown. Each press advances one stage, so holding Space does not skip multiple stages. Saving still finishes before progression. Recorded demo trials retain the actual completed cycle count and store `demo_cycle_count_skipped: true` for skipped counting; skips never fabricate 20 completed rotations. Angle tests require the researcher's **Finish angle test** button in both modes; Space during the test does not accept or bypass it. In live/formal mode, Space can skip rest only; preparation still lasts five seconds and trials still require all 20 cycles.
 
-Press **Ctrl+C in the GUI's terminal** or close the advisor window to end the session. The GUI stops recording, processes the remaining recorded orientations, writes all queued CSV rows and final trial metadata, and waits for its recording/acquisition workers and ROS resources to close before destroying the windows. Repeated Ctrl+C presses during saving do not interrupt this cleanup. SIGTERM follows the same save path. An unfinished trial receives `result: "interrupted"` for Ctrl+C, `"terminated"` for SIGTERM, or `"closed"` for window closure; already completed trials keep `"completed"`. Interrupting the countdown creates no trial recording. The terminal reports the saved directory or any save error.
+Press **Ctrl+C in the GUI's terminal** or close either the advisor or participant window to end the session and close both windows. The GUI stops recording, processes the remaining recorded orientations, writes all queued CSV rows and final trial metadata, and waits for its recording/acquisition workers and ROS resources to close before destroying the windows. Repeated Ctrl+C presses during saving do not interrupt this cleanup. SIGTERM follows the same save path. An unfinished trial receives `result: "interrupted"` for Ctrl+C, `"terminated"` for SIGTERM, or `"closed"` for window closure; already completed trials keep `"completed"`. Interrupting the countdown creates no trial recording. The terminal reports the saved directory or any save error.
 
 Publishers and recorders started in separate terminals remain independent processes; stop them in their own terminals when finished. The GUI does not own or stop them.
 
