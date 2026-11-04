@@ -1,5 +1,6 @@
 """Asynchronous, shared bias windows for remotely acquired ATI sensor data."""
 
+import copy
 import math
 import operator
 
@@ -49,6 +50,7 @@ class CentralBiasManager:
         self.generation = 0
         self.request_id = 0
         self._biases = None
+        self._bias_metadata = None
         self._latest = {}
         self._last_stamps = {}
         self._samples = {sensor: [] for sensor in SENSORS}
@@ -81,6 +83,10 @@ class CentralBiasManager:
             "last_error": self.last_error,
             "request_id": self.request_id, "bias_time_sec": self.duration,
             "warmup_sec": self.warmup, "timeout_sec": self.timeout,
+            "biases": (None if self._biases is None else {
+                str(sensor): values.tolist() for sensor, values in self._biases.items()
+            }),
+            "bias_metadata": copy.deepcopy(self._bias_metadata),
         }
 
     def request_bias(self, now_wall, now_monotonic):
@@ -199,6 +205,7 @@ class CentralBiasManager:
         except Exception as exc:
             return self._fail(f"Saving the shared bias failed: {exc}")
         self._biases = {sensor: values.copy() for sensor, values in biases.items()}
+        self._bias_metadata = copy.deepcopy(metadata)
         self.generation += 1
         self.state = "ready"
         return "completed"

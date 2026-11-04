@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
@@ -20,7 +21,7 @@ from utils.gui.study_model import normalize_quaternion
 FINGERS = ("thumb", "index", "middle")
 SENSORS = {"thumb": 1, "index": 3, "middle": 2}
 WRENCH_TOPICS = {f: f"/ERIE_Manipulation/force/wrench_s{s}_finger{s}" for f, s in SENSORS.items()}
-RAW_TOPICS = {f: f"/ERIE_Manipulation/force/force_s{s}_raw" for f, s in SENSORS.items()}
+RAW_TOPICS = {f: f"/ERIE_Manipulation/acquisition/wrench_s{s}_uncorrected" for f, s in SENSORS.items()}
 FORCE_TOPICS = {f: f"/ERIE_Manipulation/force/force_s{s}_finger{s}" for f, s in SENSORS.items()}
 FT_HEADER = ("source_timestamp_sec", "Fx", "Fy", "Fz", "Tx", "Ty", "Tz")
 AXIS_ERROR_HEADER = (
@@ -37,6 +38,54 @@ FORCE_BIAS_ACK_TIMEOUT = 3.0
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+def _bias_vectors(values):
+    """Validate all three sensor offsets and return independent numeric lists."""
+    if values is None:
+        return None
+    if not isinstance(values, dict) or set(values) != {"1", "2", "3"}:
+        raise ValueError("Force bias must include all three sensor offsets.")
+    result = {}
+    for sensor, vector in values.items():
+        if (not isinstance(vector, (list, tuple)) or len(vector) != 6
+                or any(type(value) not in (int, float) or not math.isfinite(value)
+                       for value in vector)):
+            raise ValueError("Force-bias offsets must contain six finite numbers per sensor.")
+        result[sensor] = [float(value) for value in vector]
+    return result
+
+
+def _bias_metadata(value):
+    if value is not None and not isinstance(value, dict):
+        raise ValueError("Force-bias calibration metadata must be an object.")
+    # Status arrives as JSON. Reject NaN/Infinity anywhere in the provenance,
+    # and detach nested containers before exposing them to callers.
+    return json.loads(json.dumps(value, allow_nan=False))
+
+
+def force_bias_record(snapshot):
+    """Capture an archival copy of the active, freshly confirmed sensor offsets."""
+    if (not isinstance(snapshot, dict) or not snapshot.get("available")
+            or not snapshot.get("ready") or snapshot.get("pending") or snapshot.get("busy")):
+        raise ValueError("A fresh, completed force bias is required before recording.")
+    vectors = _bias_vectors(snapshot.get("biases"))
+    if vectors is None:
+        raise ValueError("Current force-bias offsets are unavailable; update the central processor and retry.")
+    if (not isinstance(snapshot.get("processor_id"), str) or not snapshot["processor_id"]
+            or type(snapshot.get("generation")) is not int or snapshot["generation"] < 1):
+        raise ValueError("Current force-bias identity is unavailable.")
+    for field in ("request_id", "status_seq"):
+        if type(snapshot.get(field)) is not int or snapshot[field] < 0:
+            raise ValueError("Current force-bias transaction identity is unavailable.")
+    return {
+        "schema_version": 1, "captured_utc": utc_now(),
+        **{field: snapshot[field] for field in ("processor_id", "generation", "request_id", "status_seq")},
+        "biases": vectors, "bias_metadata": _bias_metadata(snapshot.get("bias_metadata")),
+        "fields": list(FT_HEADER[1:]), "units": {"force": "N", "torque": "N·mm"},
+        "coordinate_frame": "ati_sensor", "sensors": dict(SENSORS),
+        "correction": "corrected = uncorrected - bias",
+    }
 
 
 def validate_user(value):
@@ -61,20 +110,111 @@ def unique_directory(parent, stem):
 
 
 def create_session(root, user, when):
-    return unique_directory(root, f"User{validate_user(user)}_{when:%m%d%Y_%H%M}")
+    """Reuse a participant root so repeated runs share their trial archive."""
+    identifier = validate_user(user)
+    if identifier.isdigit():
+        identifier = str(int(identifier)).zfill(3)
+    path = Path(root) / f"User{identifier}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+_TRIAL_DIRECTORY_LOCK = threading.RLock()
+_ATTEMPT_TIMESTAMP = re.compile(r"\d{8}_\d{4}(?:\d{2})?(?:_\d{6})?(?:_\d{2,})?")
+
+
+def trial_reference(trial):
+    """Return the local trial number within one size/task, or Practice."""
+    if trial.practice:
+        return "Practice"
+    if type(trial.repetition) is not int or not 0 <= trial.repetition < 5:
+        raise ValueError("Measured trials require a repetition number from 0 to 4.")
+    return str(trial.repetition + 1)
+
+
+def _task_directory(session, trial):
+    folder = {"roll": "Roll", "pitch": "Pitch", "yaw": "Yaw", "finger_gating": "FingerGaiting"}[trial.task]
+    return Path(session) / f"{trial.diameter_mm}mm" / folder
+
+
+def _attempt_stem(reference):
+    return "Practice" if reference == "Practice" else f"Trial{reference}"
+
+
+def _unused_archive_path(parent, stem):
+    # All normal GUI recordings use the same lock. An existing directory, file,
+    # or dangling symlink always occupies a name and must remain untouched.
+    for attempt in range(10000):
+        path = parent / (stem if not attempt else f"{stem}_{attempt + 1:02d}")
+        if not path.exists() and not path.is_symlink():
+            return path
+    raise FileExistsError(f"Too many archived folders for {stem}")
+
+
+def _restore_archived(moved):
+    errors = []
+    for original, archived in reversed(moved):
+        try:
+            if original.exists() or original.is_symlink():
+                raise FileExistsError(f"Original path is occupied: {original}")
+            archived.rename(original)
+        except OSError as exc:
+            errors.append(f"{archived}: {exc}")
+    return errors
+
+
+def archive_trial_directories(parent, reference):
+    """Move previous attempts of one local trial into Archive, without deleting.
+
+    Archive names keep their recording timestamp. If a prior run already used
+    that name, append a unique suffix. On a move failure, restore earlier moves
+    where possible; any unrecovered directory remains intact in Archive.
+    """
+    parent = Path(parent)
+    prefix = _attempt_stem(str(reference)) + "_"
+    with _TRIAL_DIRECTORY_LOCK:
+        archive = parent / "Archive"
+        archive.mkdir(parents=True, exist_ok=True)
+        previous = sorted(
+            path for path in parent.iterdir()
+            if not path.is_symlink() and path.is_dir() and path.name.startswith(prefix)
+            and _ATTEMPT_TIMESTAMP.fullmatch(path.name[len(prefix):])
+        )
+        moved = []
+        try:
+            for original in previous:
+                destination = _unused_archive_path(archive, original.name)
+                original.rename(destination)
+                moved.append((original, destination))
+        except OSError as exc:
+            errors = _restore_archived(moved)
+            detail = "; rollback incomplete; preserved archive paths: " + "; ".join(errors) if errors else ""
+            raise OSError(f"Could not archive existing trial data{detail}") from exc
+        return tuple(moved)
 
 
 def create_trial_directory(session, user, trial, when):
-    task_folder = {"roll": "Roll", "pitch": "Pitch", "yaw": "Yaw", "finger_gating": "FingerGaiting"}[trial.task]
-    return unique_directory(Path(session) / task_folder,
-                            f"User{validate_user(user)}_Trial{trial.reference}_{when:%m%d%Y_%H%M}")
+    """Archive the prior local trial and reserve its new recording directory."""
+    validate_user(user)
+    reference = trial_reference(trial)
+    parent = _task_directory(session, trial)
+    with _TRIAL_DIRECTORY_LOCK:
+        moved = archive_trial_directories(parent, reference)
+        try:
+            return unique_directory(parent, f"{_attempt_stem(reference)}_{when:%Y%m%d_%H%M%S_%f}")
+        except OSError as exc:
+            errors = _restore_archived(moved)
+            detail = "; rollback incomplete; preserved archive paths: " + "; ".join(errors) if errors else ""
+            raise OSError(f"Could not create the new trial directory{detail}") from exc
 
 
 def create_calibration_directory(session, user, trial, when):
     """Reserve a rotation-range recording separate from measured trial data."""
+    validate_user(user)
+    parent = _task_directory(session, trial)
+    (parent / "Archive").mkdir(parents=True, exist_ok=True)
     return unique_directory(
-        Path(session) / "RotationCalibration",
-        f"User{validate_user(user)}_{trial.diameter_mm}mm_{trial.task}_{when:%m%d%Y_%H%M}",
+        parent / "RotationCalibration", f"{when:%Y%m%d_%H%M%S_%f}",
     )
 
 
@@ -91,7 +231,14 @@ class TrialWriter:
 
     def __init__(self, path, metadata, queue_size=150000):
         self.path = Path(path)
-        self.metadata = dict(metadata)
+        self.metadata = deepcopy(metadata)
+        self.metadata["raw_force_schema"] = {
+            "schema_version": 2, "calibrated": True, "bias_applied": False,
+            "coordinate_frame": "ati_sensor", "fields": list(FT_HEADER),
+            "units": {"force": "N", "torque": "N·mm", "timestamp": "Unix seconds"},
+            "timestamp_event": "acquisition host read completion",
+            "topics": dict(RAW_TOPICS), "sensors": dict(SENSORS),
+        }
         self.queue = queue.Queue(maxsize=queue_size)
         self.lock = threading.Lock()
         self.ready = threading.Event()
@@ -147,6 +294,12 @@ class TrialWriter:
                 initial_metadata = dict(self.metadata)
             metadata_stream.write(json.dumps(initial_metadata, indent=2))
             metadata_stream.flush()
+            if initial_metadata.get("force_bias") is not None:
+                # Immutable start-of-recording offsets live beside the raw CSVs.
+                # Never append taring updates or rewrite this file at trial end.
+                with (self.path / "force_bias.json").open("x", encoding="utf-8") as stream:
+                    json.dump(initial_metadata["force_bias"], stream, indent=2, allow_nan=False)
+                    stream.write("\n")
             specs = [(('wrench', f), f"{f}.csv", FT_HEADER) for f in FINGERS]
             specs += [(('raw', f), f"{f}_raw_force.csv", FT_HEADER) for f in FINGERS]
             specs += [(("pose", None), "object_orientation.csv", ("source_timestamp_sec", "qx", "qy", "qz", "qw")),
@@ -422,6 +575,8 @@ class ROSBridge:
                 "request_id": status["request_id"] if status else None,
                 "status_seq": status["status_seq"] if status else None,
                 "sample_counts": dict(status["sample_counts"]) if status else {},
+                "biases": deepcopy(status["biases"]) if status else None,
+                "bias_metadata": deepcopy(status["bias_metadata"]) if status else None,
                 "last_error": error, "message": message}
 
     def request_force_bias(self):
@@ -463,7 +618,9 @@ class ROSBridge:
             raise ValueError("Invalid force-bias sample counts")
         if status.get("last_error") is not None and not isinstance(status["last_error"], str):
             raise ValueError("Invalid force-bias error")
-        return {**status, "sample_counts": dict(counts), "last_error": status.get("last_error")}
+        return {**status, "sample_counts": dict(counts), "last_error": status.get("last_error"),
+                "biases": _bias_vectors(status.get("biases")),
+                "bias_metadata": _bias_metadata(status.get("bias_metadata"))}
 
     def sample_force_bias_status(self, data, arrival=None):
         """Accept ordered, identified status heartbeats from the processing node."""
@@ -620,12 +777,13 @@ class ROSBridge:
             return {"invalid": {f"{k[0]}_{k[1]}": v for k, v in self.invalid.items()},
                     "gaps": {f"{k[0]}_{k[1]}": v for k, v in self.gaps.items()}, "pose_drops": self.pose_drops}
 
-    def begin(self, writer, axis, target, alignment=None, baseline=None):
+    def begin(self, writer, axis, target, alignment=None, baseline=None, expected_bias=None):
         """Begin recording, with demo poses expressed using the real trial frames.
 
         alignment maps object/mesh axes to sensor4 axes; baseline is the sensor4 xyzw
         quaternion captured at trial start. Omitted frames retain the original
-        identity-frame demo behavior.
+        identity-frame demo behavior. expected_bias binds a live writer to the
+        offsets captured in its startup files, checked under the callback lock.
         """
         axis = axis or "z"
         if axis not in ("x", "y", "z"):
@@ -640,6 +798,12 @@ class ROSBridge:
             bias_status = self._force_bias_snapshot_locked(time.monotonic())
             if bias_status["pending"] or bias_status["busy"]:
                 raise ValueError("Wait for force bias to finish before starting a recording.")
+            if expected_bias is not None and not self.demo:
+                current = force_bias_record(bias_status)
+                if (not isinstance(expected_bias, dict)
+                        or any(current[field] != expected_bias.get(field)
+                               for field in ("processor_id", "generation", "biases"))):
+                    raise ValueError("Force bias changed before recording started; retry to capture the current offsets.")
             self.poses.clear()
             self.writer = writer
             self.demo_axis = axis

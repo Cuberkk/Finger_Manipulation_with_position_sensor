@@ -1,3 +1,5 @@
+"""Publish calibrated, uncorrected NI-DAQ force/torque in ATI sensor axes."""
+
 from pathlib import Path
 import sys
 import time
@@ -5,615 +7,88 @@ import time
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from utils.paths import CALIBRATION_DIR
-
+import numpy as np
 import rclpy
 from rclpy.executors import ExternalShutdownException
-from rclpy.time import Time
-import tf2_ros
-import numpy as np
 from rclpy.node import Node
 from std_msgs.msg import Float64MultiArray
-from scipy.spatial.transform import Rotation as R
 
-# Make sure this filename matches the file that contains your NIDAQReaderDual class.
+from utils.paths import CALIBRATION_DIR
 from utils.acquisition.NIDAQReaderDual import NIDAQReaderDual
-from utils.publishers.wrench import rotate_wrench
 
 
 class NIDAQATINode(Node):
-
     def __init__(self):
         super().__init__('nidaq_ati_node')
         self.nidaq_reader = None
         try:
             self._initialize()
         except BaseException:
+            # Constructor failure leaves the caller without a node to close.
             self.destroy_node()
             raise
 
     def _initialize(self):
-        # ─────────────────────────────────────────────────────────────────────
-        # NI-DAQ / ATI settings
-        # ─────────────────────────────────────────────────────────────────────
-
         self.cal1_path = CALIBRATION_DIR / 'FT44298.cal'
         self.cal2_path = CALIBRATION_DIR / 'FT45281.cal'
-
-        # Your NIDAQReaderDual default is usually:
-        # "Dev1/ai0:7,Dev1/ai16:19"
         self.phys_channels = 'Dev1/ai0:7,Dev1/ai16:19'
-
-        # Publish/read rate in Hz.
         self.publish_rate = 600.0
-
-        # Hardware-timed zero calibration, configured before opening the device.
-        self.bias_time = self.declare_parameter('bias_time_sec', 5.0).value
-        self.bias_warmup = self.declare_parameter('bias_warmup_sec', 0.5).value
-        self.bias_timeout = self.declare_parameter('bias_timeout_sec', 15.0).value
-        self.compute_bias_on_start = self.declare_parameter('bias_on_start', True).value
-        self.raw_only = self.declare_parameter('raw_only', False).value
-
         self.nidaq_reader = NIDAQReaderDual(
             cal1_path=self.cal1_path,
             cal2_path=self.cal2_path,
             aq_rate=self.publish_rate,
             phys=self.phys_channels,
-            bias_time=self.bias_time,
-            bias_switch=not self.raw_only and self.compute_bias_on_start,
-            bias_warmup=self.bias_warmup,
-            bias_timeout=self.bias_timeout,
         )
 
-        if self.raw_only:
-            # Acquisition topics always contain calibrated, un-biased ATI axes.
-            # Legacy topics remain owned by the central processor in this mode.
-            self.acquisition_pub_s1 = self.create_publisher(
-                Float64MultiArray,
-                '/ERIE_Manipulation/acquisition/wrench_s1_uncorrected',
-                1,
-            )
-            self.acquisition_pub_s2 = self.create_publisher(
-                Float64MultiArray,
-                '/ERIE_Manipulation/acquisition/wrench_s2_uncorrected',
-                1,
-            )
-            self.total_itr = 0
-            self.timer = self.create_timer(1.0 / self.publish_rate, self.timer_callback)
-            self.get_logger().info(
-                "NI-DAQ acquisition-only mode: no local bias or TF; "
-                "start the central force processor for corrected output."
-            )
-            return
-
-        # ─────────────────────────────────────────────────────────────────────
-        # TF / Polhemus Viper frame names
-        # ─────────────────────────────────────────────────────────────────────
-
-        # Shared Polhemus tracking/world base.
-        self.polhemus_base_frame = 'polhemus_base'
-
-        # NI-DAQ ATI force sensor frames.
-        self.sensor1_frame = 'sensor1'
-        self.sensor2_frame = 'sensor2'
-
-        # Object position sensor frame.
-        # This is the Polhemus Viper sensor attached to the object/cylinder.
-        self.object_position_frame = 'sensor4'
-
-        # Individual finger position sensor frames.
-        # These now match the Polhemus TF frame names directly.
-        self.finger1_position_frame = 'sensor1'
-        self.finger2_position_frame = 'sensor2'
-
-        # Physical sensor spacing around the object.
-        # sensor1 uses -120 degrees.
-        # sensor2 uses 0 degrees.
-        self.sensor_angles_deg = {
-            'sensor1': -120.0,
-            'sensor2': 0.0,
-        }
-
-        # Extra ATI sensor z-axis alignment rotation.
-        # This is Rz(48 degrees), same idea as the LabJack ATI publisher.
-        z_rot_48 = -48.
-        z_rot_rad = np.deg2rad(z_rot_48)
-        self.sensor_rot_z_48 = np.array([
-            [np.cos(z_rot_rad), -np.sin(z_rot_rad), 0.0],
-            [np.sin(z_rot_rad),  np.cos(z_rot_rad), 0.0],
-            [0.0,                0.0,               1.0]
-        ])
-        
-        # #(OBJECT ORGIN FRAME CHANGES)
-        # sensor_origin_42 = 42.
-        # sensor_origin_rad = np.deg2rad(sensor_origin_42)
-        # self.sensor_rot_x_42 = np.array([
-        #     [np.cos(sensor_origin_rad), -np.sin(sensor_origin_rad), 0.0],
-        #     [np.sin(sensor_origin_rad),  np.cos(sensor_origin_rad), 0.0],
-        #     [0.0,                0.0,               1.0]
-        # ])
-        
-        # self.finger_l = 7.3       # offset length sensoor to object origin (mm)
-        # self.finger_H = 10.996    # sensor origin height (mm)
-        # self.finger_R = 25.0      # object radius (mm)
-
-        # Precompute manual ATI force-sensor-to-object rotations.
-        # sensor1: R_object_force1 = Rz(-120) @ rot_base @ Rz(48)
-        # sensor2: R_object_force2 = Rz(+120) @ rot_base @ Rz(48)
-        self.rot_obj_force_s1 = self.ati_force_to_object_rotation('sensor1')
-        self.rot_obj_force_s2 = self.ati_force_to_object_rotation('sensor2')
-
-        # Maximum allowed TF transform age in seconds.
-        self.trans_delay = 1.5
-
-        # ─────────────────────────────────────────────────────────────────────
-        # ROS publisher and timer
-        # ─────────────────────────────────────────────────────────────────────
-
-        self.nidaq_pub_s1 = self.create_publisher(
+        self.acquisition_pub_s1 = self.create_publisher(
             Float64MultiArray,
-            'ERIE_Manipulation/force/force_s1_finger1',
-            1
+            '/ERIE_Manipulation/acquisition/wrench_s1_uncorrected',
+            1,
         )
-
-        self.nidaq_pub_s2 = self.create_publisher(
+        self.acquisition_pub_s2 = self.create_publisher(
             Float64MultiArray,
-            'ERIE_Manipulation/force/force_s2_finger2',
-            1
+            '/ERIE_Manipulation/acquisition/wrench_s2_uncorrected',
+            1,
         )
-
-        # Parallel six-component topics preserve the existing force-only schema.
-        self.nidaq_pub_wrench_s1 = self.create_publisher(
-            Float64MultiArray,
-            '/ERIE_Manipulation/force/wrench_s1_finger1',
-            1
-        )
-        self.nidaq_pub_wrench_s2 = self.create_publisher(
-            Float64MultiArray,
-            '/ERIE_Manipulation/force/wrench_s2_finger2',
-            1
-        )
-        
-        self.nidaq_pub_raw_s1 = self.create_publisher(
-            Float64MultiArray,
-            'ERIE_Manipulation/force/force_s1_raw',
-            1
-        )
-        
-        self.nidaq_pub_raw_s2  = self.create_publisher(
-            Float64MultiArray,
-            'ERIE_Manipulation/force/force_s2_raw',
-            1
-        )
-        # self.nidaq_pub_object_raw_s1 = self.create_publisher(
-        #     Float64MultiArray,
-        #     'ERIE_Manipulation/force/object_force_s1_raw',
-        #     1
-        # )
-        
-        # self.nidaq_pub_object_raw_s2 = self.create_publisher(
-        #     Float64MultiArray,
-        #     'ERIE_Manipulation/force/object_force_s2_raw',
-        #     1
-        # )
-
-        self.timer = self.create_timer(
-            1.0 / self.publish_rate,
-            self.timer_callback
-        )
-
-        # ─────────────────────────────────────────────────────────────────────
-        # TF setup
-        # ─────────────────────────────────────────────────────────────────────
-
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-
-        self.miss_itr = 0
-        self.total_itr = 0
-
+        self.timer = self.create_timer(1.0 / self.publish_rate, self.timer_callback)
         self.get_logger().info(
-            "NI-DAQ ATI + Polhemus Finger Position Node Initialized"
+            "NI-DAQ publishes ATI force/torque without bias subtraction; "
+            "start the central force processor for bias and coordinate transforms."
         )
-
 
     def timer_callback(self):
-        """
-        Main loop.
-
-        1. Stream force vectors from NI-DAQ ATI sensors 1 and 2.
-        2. Read Polhemus Viper transforms from TF.
-        3. Compute:
-              force sensor 1 -> finger 1 position sensor frame
-              force sensor 2 -> finger 2 position sensor frame
-        4. Publish:
-              force_s1_finger1, force_s2_finger2, timestamp
-        """
-
-        self.total_itr += 1
-
-        # Reader returns 12 values:
-        # [Fx1,Fy1,Fz1,Tx1,Ty1,Tz1,
-        #  Fx2,Fy2,Fz2,Tx2,Ty2,Tz2]
-        ft_arr = self.nidaq_reader.read()
-        if ft_arr is False:
-            return
-
-        if self.raw_only:
-            values = np.asarray(ft_arr, dtype=np.float64)
-            if values.shape != (12,) or not np.isfinite(values).all():
-                self.get_logger().warn("Invalid NI-DAQ acquisition sample; expected 12 finite values.")
-                return
-            # Source-host wall time at read completion, independent of /clock.
+        """Publish [Fx, Fy, Fz, Tx, Ty, Tz, source_host_unix_time]."""
+        try:
+            ft_arr = self.nidaq_reader.read()
+            # Wall time at read completion, independent of ROS /clock.
             # This is not a hardware acquisition timestamp.
             timestamp_sec = time.time()
-            self.acquisition_pub_s1.publish(Float64MultiArray(
-                data=np.append(values[:6], timestamp_sec).tolist()
-            ))
-            self.acquisition_pub_s2.publish(Float64MultiArray(
-                data=np.append(values[6:], timestamp_sec).tolist()
-            ))
-            return
-        
-        # Reader returns 12 values:
-        # [Fx1,Fy1,Fz1,Tx1,Ty1,Tz1,
-        #  Fx2,Fy2,Fz2,Tx2,Ty2,Tz2]
-        ft_s1 = np.asarray(ft_arr[0:6], dtype=np.float64)
-        ft_s2 = np.asarray(ft_arr[6:12], dtype=np.float64)
-
-        # #OBJECT ORGIN FRAME CHANGES
-        # torque_s1 = ft_s1[3:6]
-        # torque_s2 = ft_s2[3:6]
-
-        timestamp = self.get_clock().now().to_msg()
-        timestamp_sec = np.float64(
-            timestamp.sec + 1e-9 * timestamp.nanosec
-        )
-
-        raw_data_msg_f1 = Float64MultiArray(
-            data=np.concatenate([
-                ft_s1,
-                np.array([timestamp_sec], dtype=np.float64)
-            ]).flatten().tolist()
-        )
-        self.nidaq_pub_raw_s1.publish(raw_data_msg_f1)
-
-        raw_data_msg_f2 = Float64MultiArray(
-            data=np.concatenate([
-                ft_s2,
-                np.array([timestamp_sec], dtype=np.float64)
-            ]).flatten().tolist()
-        )
-        self.nidaq_pub_raw_s2.publish(raw_data_msg_f2)
-
-        try:
-            now = self.get_clock().now()
-
-            # ─────────────────────────────────────────────────────────────────
-            # Look up Polhemus Viper transforms relative to polhemus_base.
-            #
-            # lookup_transform(target_frame, source_frame, time)
-            #
-            # lookup_transform(polhemus_base, sensor4, ...)
-            # gives:
-            #       sensor4/object frame -> polhemus_base frame
-            #
-            # lookup_transform(polhemus_base, sensor1, ...)
-            # gives:
-            #       finger 1 position frame -> polhemus_base frame
-            #
-            # lookup_transform(polhemus_base, sensor2, ...)
-            # gives:
-            #       finger 2 position frame -> polhemus_base frame
-            # ─────────────────────────────────────────────────────────────────
-
-            t_base_obj = self.tf_buffer.lookup_transform(
-                self.polhemus_base_frame,
-                self.object_position_frame,
-                rclpy.time.Time()
-            )
-
-            t_base_finger1 = self.tf_buffer.lookup_transform(
-                self.polhemus_base_frame,
-                self.finger1_position_frame,
-                rclpy.time.Time()
-            )
-
-            t_base_finger2 = self.tf_buffer.lookup_transform(
-                self.polhemus_base_frame,
-                self.finger2_position_frame,
-                rclpy.time.Time()
-            )
-
-            # Check transform age.
-            for name, trans in [
-                ("object sensor4", t_base_obj),
-                ("finger1 position sensor", t_base_finger1),
-                ("finger2 position sensor", t_base_finger2),
-            ]:
-                if not self.transform_is_recent(trans, now):
-                    self.handle_old_transform(name)
-                    return
-
-            # ─────────────────────────────────────────────────────────────────
-            # Convert Polhemus TF transforms into rotation matrices.
-            #
-            # These rotations map:
-            #       object frame -> polhemus_base frame
-            #       finger position frame -> polhemus_base frame
-            # ─────────────────────────────────────────────────────────────────
-
-            rot_base_obj = self.transform_rot_generator(t_base_obj)
-            rot_base_finger1 = self.transform_rot_generator(t_base_finger1)
-            rot_base_finger2 = self.transform_rot_generator(t_base_finger2)
-
-            # ─────────────────────────────────────────────────────────────────
-            # Compute finger position sensor rotations into object frame.
-            #
-            # Given:
-            #       R_base_obj      = object frame -> polhemus_base frame
-            #       R_base_finger   = finger position frame -> polhemus_base frame
-            #
-            # We want:
-            #       R_object_finger = finger position frame -> object frame
-            #
-            # Since:
-            #       R_object_base = R_base_obj.T
-            #
-            # Therefore:
-            #       R_object_finger = R_base_obj.T @ R_base_finger
-            # ─────────────────────────────────────────────────────────────────
-
-            rot_obj_finger1 = rot_base_obj.T @ rot_base_finger1
-            rot_obj_finger2 = rot_base_obj.T @ rot_base_finger2
-
-            # ─────────────────────────────────────────────────────────────────
-            # Compute ATI force sensor rotations into individual finger
-            # position sensor frames.
-            #
-            # sensor1:
-            #       R_object_force1 = Rz(-120) @ rot_base @ Rz(48)
-            #       R_finger1_force1 = R_object_finger1.T @ R_object_force1
-            #
-            # sensor2:
-            #       R_object_force2 = Rz(+120) @ rot_base @ Rz(48)
-            #       R_finger2_force2 = R_object_finger2.T @ R_object_force2
-            # ─────────────────────────────────────────────────────────────────
-
-            rot_finger1_force_s1 = rot_obj_finger1.T @ self.rot_obj_force_s1
-            rot_finger2_force_s2 = rot_obj_finger2.T @ self.rot_obj_force_s2
-
-            # Rotate force and torque into finger axes using the same rotation.
-            # Moments remain about each ATI sensor origin; no translation is applied.
-            wrench_s1_finger1 = rotate_wrench(rot_finger1_force_s1, ft_s1)
-            wrench_s2_finger2 = rotate_wrench(rot_finger2_force_s2, ft_s2)
-            force_s1_finger1 = wrench_s1_finger1[:3]
-            force_s2_finger2 = wrench_s2_finger2[:3]
-            
-            
-            # # After the existing force rotation, rotate force+torque into the
-            # # object origin frame and solve for (theta, h) (CHANGE FOR OBJECT ORIGIN FRAME)
-            # for force_raw, torque_raw, pub, label in [
-            #     (force_s1, torque_s1, self.nidaq_pub_object_raw_s1, 'sensor1'),
-            #     (force_s2, torque_s2, self.nidaq_pub_object_raw_s2, 'sensor2'),
-            # ]:
-            #     f_obj, tau_obj = self.rotate_to_object_frame(force_raw, torque_raw)
-            #     contact = self.solve_contact_position(f_obj, tau_obj, sensor_name=label)
-
-            #     if contact is not None:
-            #         contact_arr = np.array([
-            #             contact['fx'],
-            #             contact['fy'],
-            #             contact['fz'],
-            #             timestamp_sec
-            #         ], dtype=np.float64)
-                    
-            # pub.publish(Float64MultiArray(data=contact_arr.flatten().tolist()))
-            
-            # ─────────────────────────────────────────────────────────────────
-            # Publish data.
-            # ─────────────────────────────────────────────────────────────────
-
-            data_s1 = np.concatenate([
-                # Force sensor 1 in finger 1 position sensor frame
-                force_s1_finger1.astype(np.float64),
-
-                # Timestamp
-                np.array([timestamp_sec], dtype=np.float64)
-            ])
-
-            data_s2 = np.concatenate([
-                # Force sensor 2 in finger 2 position sensor frame
-                force_s2_finger2.astype(np.float64),
-
-                # Timestamp
-                np.array([timestamp_sec], dtype=np.float64)
-            ])
-            # #OBJECT ORGIN FRAME CHANGES
-            # msg = Float64MultiArray(data=contact_arr.flatten().tolist())
-            msg_s1 = Float64MultiArray(data=data_s1.flatten().tolist())
-            msg_s2 = Float64MultiArray(data=data_s2.flatten().tolist())
-
-            # #OBJECT ORGIN FRAME CHANGES
-            # pub.publish(msg)
-            self.nidaq_pub_s1.publish(msg_s1)
-            self.nidaq_pub_s2.publish(msg_s2)
-
-            # [Fx, Fy, Fz, Tx, Ty, Tz, timestamp_sec], with the same source
-            # timestamp as the corresponding raw and force-only messages.
-            self.nidaq_pub_wrench_s1.publish(Float64MultiArray(
-                data=np.append(wrench_s1_finger1, timestamp_sec).tolist()
-            ))
-            self.nidaq_pub_wrench_s2.publish(Float64MultiArray(
-                data=np.append(wrench_s2_finger2, timestamp_sec).tolist()
-            ))
-
-        except tf2_ros.TransformException as exc:
-            self.miss_itr += 1
+            if ft_arr is False:
+                return
+            values = np.asarray(ft_arr, dtype=np.float64)
+        except Exception as exc:
             self.get_logger().warn(
-                f"Transform not received: {exc}. "
-                f"Miss rate: {self.miss_itr / self.total_itr * 100:.2f}%"
+                f"Could not read NI-DAQ force/torque: {exc}. Skipping sample.",
+                throttle_duration_sec=5.0,
             )
+            return
 
-    # #OBJECT ORIGIN FRAME CHANGES
-    # def rotate_to_object_frame(self, force_s1, force_s2, torque_s1, torque_s2):
-    #     """
-    #     Rotate force and torque from sensor frame into object origin frame
-    #     using the 42-degree x-axis rotation matrix.
-    #     """
-    #     force1_obj  = self.sensor_rot_x_42 @ force_s1
-    #     torque1_obj = self.sensor_rot_x_42 @ torque_s1
-    #     force2_obj  = self.sensor_rot_x_42 @ force_s2
-    #     torque2_obj = self.sensor_rot_x_42 @ torque_s2
-    #     return force1_obj, torque1_obj, force2_obj, torque2_obj
+        if values.shape != (12,) or not np.isfinite(values).all():
+            self.get_logger().warn(
+                "Invalid NI-DAQ sample; expected 12 finite force/torque values.",
+                throttle_duration_sec=5.0,
+            )
+            return
 
-    # def solve_contact_position(self, force1_obj, torque1_obj, force2_obj, torque2_obj):
-    #     """
-    #     Solve for contact position (theta, h) and finger-frame forces
-    #     for both sensors.
-    #     """
-    #     results = {}
-
-    #     for f_obj, tau_obj, label in [
-    #         (force1_obj, torque1_obj, 'sensor1'),
-    #         (force2_obj, torque2_obj, 'sensor2'),
-    #     ]:
-    #         fx_p, fy_p, fz_p = f_obj
-    #         _,    zy_p, zz_p = tau_obj
-
-    #         magnitude = self.finger_R * np.sqrt(fx_p**2 + fz_p**2)
-    #         if magnitude < 1e-9:
-    #             self.get_logger().warn(f"[{label}] fx' and fz' near zero — skipping.")
-    #             results[label] = None
-    #             continue
-
-    #         phi     = np.arctan2(fx_p, fz_p)
-    #         sin_arg = np.clip(-(fx_p * self.finger_l + zy_p) / magnitude, -1.0, 1.0)
-    #         theta   = np.arcsin(sin_arg) + phi
-
-    #         if abs(fx_p) < 1e-9:
-    #             self.get_logger().warn(f"[{label}] fx' near zero — cannot solve for h. Skipping.")
-    #             results[label] = None
-    #             continue
-
-    #         h  = self.finger_H + (zz_p - fy_p * self.finger_R * np.sin(theta)) / fx_p
-    #         fx =  fy_p
-    #         fy = -fx_p * np.cos(theta) + fz_p * np.sin(theta)
-    #         fz =  fx_p * np.sin(theta) + fz_p * np.cos(theta)
-
-    #         results[label] = {
-    #             'fx': fx,
-    #             'fy': fy,
-    #             'fz': fz
-    #         }
-
-    #     return results
-    
-    def ati_force_to_object_rotation(self, sensor_name):
-        """
-        Manually define ATI force sensor rotation into the object frame.
-
-        This represents:
-
-            R_object_force
-
-        meaning:
-
-            force sensor frame -> object frame
-
-        For this file:
-
-            sensor1: R_object_force1 = Rz(-120) @ rot_base @ Rz(48)
-            sensor2: R_object_force2 = Rz(+120) @ rot_base @ Rz(48)
-        """
-
-        theta_deg = self.sensor_angles_deg[sensor_name]
-        theta_rad = np.deg2rad(theta_deg)
-
-        rot_z = np.array([
-            [np.cos(theta_rad), -np.sin(theta_rad), 0.0],
-            [np.sin(theta_rad),  np.cos(theta_rad), 0.0],
-            [0.0,                0.0,               1.0]
-        ])
-
-        # Base ATI force sensor to object rotation.
-        #
-        # This maps the ATI local force axes into the object axes.
-        # Edit this matrix only if the physical ATI axis directions are different.
-        #
-        # Matrix:
-        # [ 0  0  1]
-        # [ 0  1  0]
-        # [-1  0  0]
-        rot_base = np.array([
-            [0.0, 0.0, 1.0],
-            [0.0, 1.0, 0.0],
-            [-1.0, 0.0, 0.0]
-        ])
-
-        rot_obj_force = rot_z.T @ rot_base @ self.sensor_rot_z_48.T
-
-        return rot_obj_force
-
-    def transform_is_recent(self, trans_msg, now):
-        """
-        Check whether a TF transform is recent enough to use.
-        """
-
-        tf_time = trans_msg.header.stamp
-        tf_stamp = Time(seconds=tf_time.sec, nanoseconds=tf_time.nanosec)
-
-        dt = abs(now.nanoseconds - tf_stamp.nanoseconds) * 1e-9
-
-        return dt < self.trans_delay
-
-    def transform_rot_generator(self, trans_msg):
-        """
-        Extract quaternion from a TF transform and convert it to a 3x3
-        rotation matrix.
-        """
-
-        q = trans_msg.transform.rotation
-
-        rotation = R.from_quat([
-            q.x,
-            q.y,
-            q.z,
-            q.w
-        ]).as_matrix()
-
-        return rotation
-
-    def transform_translation_generator(self, trans_msg):
-        """
-        Extract translation from a TF transform and convert it to a 3-element
-        numpy vector.
-        """
-
-        t = trans_msg.transform.translation
-
-        translation = np.array([
-            t.x,
-            t.y,
-            t.z
-        ], dtype=np.float64)
-
-        return translation
-
-    def handle_old_transform(self, sensor_name):
-        """
-        Handle a stale TF transform.
-        """
-
-        self.miss_itr += 1
-
-        self.get_logger().warn(
-            f"{sensor_name} transform too old. "
-            f"Miss rate: {self.miss_itr / self.total_itr * 100:.2f}%"
-        )
+        self.acquisition_pub_s1.publish(Float64MultiArray(
+            data=[*values[0:6].tolist(), timestamp_sec]
+        ))
+        self.acquisition_pub_s2.publish(Float64MultiArray(
+            data=[*values[6:12].tolist(), timestamp_sec]
+        ))
 
     def destroy_node(self):
-        """Close the NI task, including after interrupted bias initialization."""
+        """Release the acquisition device before destroying ROS callbacks."""
         reader = getattr(self, 'nidaq_reader', None)
         self.nidaq_reader = None
         try:
@@ -631,10 +106,8 @@ def main(args=None):
         rclpy.init(args=args)
         node = NIDAQATINode()
         rclpy.spin(node)
-
     except (KeyboardInterrupt, ExternalShutdownException):
-        print("Shutting down NI-DAQ ATI + Polhemus Finger Position Node...")
-
+        print("Shutting down NI-DAQ ATI acquisition node...")
     finally:
         try:
             if node is not None:

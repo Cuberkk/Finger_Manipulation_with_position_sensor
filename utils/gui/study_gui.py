@@ -31,8 +31,9 @@ from utils.gui.study_model import (
     relative_rotation,
 )
 from utils.gui.study_io import (
-    FINGERS, SENSORS, WRENCH_TOPICS, STALE_SEC, ROSBridge, TrialWriter, PreviewWriter,
+    FINGERS, SENSORS, WRENCH_TOPICS, RAW_TOPICS, STALE_SEC, ROSBridge, TrialWriter, PreviewWriter,
     create_session, create_trial_directory, create_calibration_directory, validate_user, utc_now,
+    force_bias_record, unique_directory,
 )
 
 NAVY = "#0E1726"
@@ -140,6 +141,7 @@ class StudyApplication:
         self.rotation = np.eye(3)
         self.started = None
         self.session_path = self.session_user = None
+        self.session_metadata_path = None
         self.writer = None
         self.trial_path = None
         self.closing = False
@@ -166,7 +168,7 @@ class StudyApplication:
                                             "Waiting for the force processor…")
         self.notice = tk.StringVar(value="Demo mode: simulated orientation and force data." if args.demo else "Connecting to ROS 2…")
         self.start_label = tk.StringVar(value="—")
-        self.folder_label = tk.StringVar(value="A session folder is created when the first trial starts.")
+        self.folder_label = tk.StringVar(value="Participant and trial folders are created when recording starts.")
         self.status_label = tk.StringVar(value="READY")
         self.count_label = tk.StringVar(value="0 / 20")
         self.pose_label = tk.StringVar(value="Sensor 4 · waiting")
@@ -696,6 +698,10 @@ class StudyApplication:
         validate_user(self.user.get())
         if self._force_bias_busy(snapshot):
             raise ValueError("Force bias is in progress. Keep all 3 sensors unloaded and wait before starting.")
+        if not self.args.demo:
+            # Every live recording must carry the actual active offsets, even
+            # when the optional finger-frame F/T requirement is unchecked.
+            force_bias_record(self._force_bias_snapshot(snapshot))
         now = time.monotonic()
         pose = snapshot["pose"]
         if pose is None or now - pose.arrival > STALE_SEC:
@@ -723,7 +729,7 @@ class StudyApplication:
         self.notice.set("New demo trials will save data." if enabled else
                         "New demo trials will run without creating data files.")
         if self.state == "ready":
-            self.folder_label.set("A session folder is created when the first recorded trial starts." if enabled else
+            self.folder_label.set("Participant and trial folders are created when recording starts." if enabled else
                                   "Demo preview · data recording disabled · no files will be written.")
 
     def start_trial(self):
@@ -769,19 +775,30 @@ class StudyApplication:
             # Recheck after the countdown; capture R0 from the most recent fresh TF.
             snapshot = self.bridge.snapshot()
             pose = self.preflight(snapshot)
+            # Capture once after the countdown, before creating any trial files.
+            # This archives the active calibration without requesting a new tare.
+            force_bias = self._force_bias_snapshot(snapshot)
+            bias_record = ({"schema_version": 1, "captured_utc": utc_now(),
+                            "demo": True, "biases": None,
+                            "description": "Simulated force data; no hardware bias is applied."}
+                           if self.args.demo else force_bias_record(force_bias))
             when = datetime.now(self.zone)
             user = validate_user(self.user.get())
             recording_enabled = not self.args.demo or self.record_demo_data.get()
             if recording_enabled and (self.session_path is None or self.session_user != user):
                 session_path = create_session(self.args.data_root, user, when)
+                metadata_dir = unique_directory(session_path / "SessionMetadata", f"Session_{when:%Y%m%d_%H%M%S_%f}")
+                session_metadata_path = metadata_dir / "session_metadata.json"
                 session = {"user_number": user, "started_local": when.isoformat(), "timezone": self.args.timezone,
                            "demo": self.args.demo, "protocol_file": str(self.args.protocol),
                            "rest_config_file": str(self.args.rest_config), "rest_seconds": asdict(self.rest_times),
                            "practice_targets_deg": self.practice_targets_deg,
                            "object_to_sensor4_matrix": self.alignment.tolist(),
+                           "storage_layout_version": 2, "participant_directory": session_path.name,
                            "trials": [asdict(t) for t in self.trials]}
-                (session_path / "session_metadata.json").write_text(json.dumps(session, indent=2), encoding="utf-8")
+                session_metadata_path.write_text(json.dumps(session, indent=2), encoding="utf-8")
                 self.session_path, self.session_user = session_path, user
+                self.session_metadata_path = session_metadata_path
             create_directory = create_calibration_directory if self.calibrating else create_trial_directory
             self.trial_path = (create_directory(self.session_path, user, self.trial, when)
                                if recording_enabled else None)
@@ -795,7 +812,6 @@ class StudyApplication:
             self.ft_interruptions = {finger: 0 for finger in FINGERS}
             self.ft_stale = {finger: False for finger in FINGERS}
             self.quality_issues = []
-            force_bias = self._force_bias_snapshot(snapshot)
             self._force_bias_recording_generation = force_bias.get("generation") if force_bias else None
             self._force_bias_recording_processor_id = force_bias.get("processor_id") if force_bias else None
             self._force_bias_recording_changed = False
@@ -834,6 +850,13 @@ class StudyApplication:
                         "force_unit": "N", "torque_unit": "N*mm", "wrench_axes": "finger frame",
                         "torque_origin": "ATI sensing origin; axes rotated only; no moment-arm translation",
                         "topics": WRENCH_TOPICS, "sensor_mapping": SENSORS, "require_all_ft": self.require_ft.get(),
+                        "raw_topics": RAW_TOPICS, "raw_axes": "ATI sensor frame", "raw_bias_applied": False,
+                        "force_bias": bias_record,
+                        "storage_layout_version": 2, "task_trial_number": self.trial.task_position,
+                        "participant_directory": self.session_path.name if recording_enabled else None,
+                        "session_metadata_file": (self.session_metadata_path.relative_to(self.session_path).as_posix()
+                                                  if recording_enabled else None),
+                        "session_metadata_base": "participant_directory",
                         "acquisition_counters_start": self.start_counters}
             self.writer = (TrialWriter(self.trial_path, metadata) if recording_enabled else PreviewWriter(metadata))
             if not self.writer.ready.wait(timeout=2):
@@ -843,7 +866,8 @@ class StudyApplication:
             # Saving a baseline row also makes the quaternion reference explicit in CSV.
             self.writer.add("pose", None, (pose.source_timestamp, *pose.quaternion))
             self.bridge.begin(self.writer, self.trial.axis, self.counter.target_deg,
-                              alignment=self.alignment, baseline=self.baseline)
+                              alignment=self.alignment, baseline=self.baseline,
+                              expected_bias=None if self.args.demo else bias_record)
             self.state = "recording"
             self.previous_tracking = True
             self.rotation = np.eye(3)
@@ -1020,6 +1044,11 @@ class StudyApplication:
                 self.quality_issues.append(f"{finger} F/T interrupted")
             if end_counters["invalid"][key] > self.start_counters["invalid"][key]:
                 self.quality_issues.append(f"{finger} invalid F/T samples")
+            raw_key = "raw_" + finger
+            if end_counters["gaps"][raw_key] > self.start_counters["gaps"][raw_key]:
+                self.quality_issues.append(f"{finger} raw F/T interrupted")
+            if end_counters["invalid"][raw_key] > self.start_counters["invalid"][raw_key]:
+                self.quality_issues.append(f"{finger} invalid raw F/T samples")
         if self.tracking_interruptions:
             self.quality_issues.append("orientation tracking interrupted")
         if end_counters["pose_drops"] > self.start_counters["pose_drops"]:
@@ -1102,6 +1131,7 @@ class StudyApplication:
                 self.notice.set(f"{error} Hold at neutral and start the angle test again.")
             return
         incomplete = [f for f in FINGERS if writer.counts[f] == 0]
+        incomplete_raw = [f for f in FINGERS if writer.raw_counts[f] == 0]
         if writer.error:
             self.status_label.set("SAVE ERROR")
             self.notice.set("Recording error: " + writer.error)
@@ -1110,13 +1140,15 @@ class StudyApplication:
                                   "DEMO PREVIEW · COMPLETE" if writer.result == "completed" else
                                   "DEMO PREVIEW · STOPPED")
             self.notice.set("Demo preview finished. No data files were written.")
-        elif writer.overflows or incomplete or self.quality_issues:
+        elif writer.overflows or incomplete or incomplete_raw or self.quality_issues:
             self.status_label.set("SAVED · REVIEW DATA")
             issues = list(self.quality_issues)
             if writer.overflows:
                 issues.append(f"{writer.overflows} writer queue drops")
             if incomplete:
                 issues.append("empty F/T: " + ", ".join(incomplete))
+            if incomplete_raw:
+                issues.append("empty raw F/T: " + ", ".join(incomplete_raw))
             self.notice.set(f"Saved {self.count}/20 cycles. Review: " + "; ".join(issues) + ".")
         else:
             self.status_label.set("COMPLETE · SAVED" if writer.result == "completed" else
