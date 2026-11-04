@@ -1,4 +1,4 @@
-"""Rest durations and monotonic countdowns, independent of Tk and ROS."""
+"""Literal study settings and monotonic countdowns, independent of Tk and ROS."""
 from __future__ import annotations
 
 import ast
@@ -8,10 +8,13 @@ import operator
 from pathlib import Path
 from typing import NamedTuple
 
+import numpy as np
+
 from utils.gui.study_model import TrialSpec
 
 
 _KINDS = ("trials", "tasks", "objects")
+_STUDY_SETTINGS = ("PRACTICE_TARGETS_DEG", "SENSOR4_FROM_OBJECT")
 
 
 def _whole_seconds(value, name):
@@ -58,17 +61,20 @@ class RestTimes:
         return RestSpec(kind, getattr(self, f"{kind}_sec"))
 
 
-def load_rest_times(path: str | Path) -> RestTimes:
-    """Read literal minute settings from Rest_Time.py without executing it.
+@dataclass(frozen=True)
+class StudySettings:
+    rest_times: RestTimes
+    practice_targets_deg: dict[int, float]
+    sensor4_from_object: np.ndarray
 
-    Positive fractional seconds round up so the integer-second rest never
-    shortens the requested duration. Set a value to zero to omit that rest.
-    """
+
+def _read_literal_settings(path: str | Path) -> dict:
+    """Read only whitelisted literal assignments, never importing the file."""
     path = Path(path)
     try:
         module = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
     except SyntaxError as exc:
-        raise ValueError(f"Invalid rest time configuration: {exc.msg}") from exc
+        raise ValueError(f"Invalid study configuration: {exc.msg}") from exc
     values = {}
     for statement in module.body:
         if (isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant)
@@ -80,13 +86,24 @@ def load_rest_times(path: str | Path) -> RestTimes:
         elif isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name):
             name, expression = statement.target.id, statement.value
         else:
-            raise ValueError("Rest time configuration must contain literal assignments to trials, tasks, and objects.")
-        if name not in _KINDS or name in values:
-            raise ValueError(f"Unexpected or duplicate rest time setting: {name}.")
+            raise ValueError("Study configuration must contain only literal assignments to "
+                             "trials, tasks, objects, PRACTICE_TARGETS_DEG, and SENSOR4_FROM_OBJECT.")
+        if name not in _KINDS + _STUDY_SETTINGS or name in values:
+            raise ValueError(f"Unexpected or duplicate study setting: {name}.")
         try:
-            minutes = ast.literal_eval(expression)
+            values[name] = ast.literal_eval(expression)
         except (TypeError, ValueError, SyntaxError) as exc:
-            raise ValueError(f"{name} must be a finite, nonnegative number of minutes.") from exc
+            raise ValueError(f"{name} must be a literal value.") from exc
+    return values
+
+
+def _rest_times_from_values(values: dict) -> RestTimes:
+    missing = set(_KINDS) - values.keys()
+    if missing:
+        raise ValueError("Missing rest time settings: " + ", ".join(sorted(missing)) + ".")
+    seconds_by_kind = {}
+    for name in _KINDS:
+        minutes = values[name]
         if isinstance(minutes, bool) or not isinstance(minutes, (int, float)):
             raise ValueError(f"{name} must be a finite, nonnegative number of minutes.")
         try:
@@ -96,11 +113,75 @@ def load_rest_times(path: str | Path) -> RestTimes:
             valid = False
         if not valid:
             raise ValueError(f"{name} must be a finite, nonnegative number of minutes.")
-        values[name] = math.ceil(seconds)
-    missing = set(_KINDS) - values.keys()
+        seconds_by_kind[name] = math.ceil(seconds)
+    return RestTimes(**{f"{kind}_sec": seconds_by_kind[kind] for kind in _KINDS})
+
+
+def load_rest_times(path: str | Path) -> RestTimes:
+    """Read literal minute settings without executing the configuration file.
+
+    Rest-only files remain supported. Positive fractional seconds round up so
+    the integer-second rest never shortens the requested duration.
+    """
+    return _rest_times_from_values(_read_literal_settings(path))
+
+
+def _practice_targets(value) -> dict[int, float]:
+    name = "PRACTICE_TARGETS_DEG"
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be a diameter-to-angle dictionary.")
+    targets = {}
+    for diameter, target in value.items():
+        if isinstance(diameter, bool) or not isinstance(diameter, int) or diameter <= 0:
+            raise ValueError(f"{name} diameter keys must be positive integers in millimetres.")
+        if isinstance(target, bool) or not isinstance(target, (int, float)):
+            raise ValueError(f"{name}[{diameter}] must be a finite, positive angle in degrees.")
+        try:
+            target = float(target)
+        except (ValueError, OverflowError) as exc:
+            raise ValueError(f"{name}[{diameter}] must be a finite, positive angle in degrees.") from exc
+        if not math.isfinite(target) or target <= 0:
+            raise ValueError(f"{name}[{diameter}] must be a finite, positive angle in degrees.")
+        targets[diameter] = target
+    missing = {50, 80} - targets.keys()
     if missing:
-        raise ValueError("Missing rest time settings: " + ", ".join(sorted(missing)) + ".")
-    return RestTimes(**{f"{kind}_sec": values[kind] for kind in _KINDS})
+        raise ValueError(f"{name} is missing object diameters: " + ", ".join(map(str, sorted(missing))) + ".")
+    return targets
+
+
+def _sensor4_from_object(value) -> np.ndarray:
+    name = "SENSOR4_FROM_OBJECT"
+    if (not isinstance(value, (list, tuple)) or len(value) != 3
+            or any(not isinstance(row, (list, tuple)) or len(row) != 3 for row in value)):
+        raise ValueError(f"{name} must be a 3 by 3 rotation matrix.")
+    if any(isinstance(entry, bool) or not isinstance(entry, (int, float))
+           for row in value for entry in row):
+        raise ValueError(f"{name} must contain only finite real numbers.")
+    try:
+        matrix = np.array(value, dtype=float)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} must contain only finite real numbers.") from exc
+    if not np.all(np.isfinite(matrix)):
+        raise ValueError(f"{name} must contain only finite real numbers.")
+    with np.errstate(over="ignore", invalid="ignore"):
+        orthogonal = np.allclose(matrix.T @ matrix, np.eye(3), atol=1e-6, rtol=0)
+    if not orthogonal or not math.isclose(float(np.linalg.det(matrix)), 1.0, abs_tol=1e-6):
+        raise ValueError(f"{name} must be orthogonal with determinant +1.")
+    matrix.setflags(write=False)
+    return matrix
+
+
+def load_study_settings(path: str | Path) -> StudySettings:
+    """Load required study settings from literal assignments without execution."""
+    values = _read_literal_settings(path)
+    missing = set(_STUDY_SETTINGS) - values.keys()
+    if missing:
+        raise ValueError("Missing study settings: " + ", ".join(sorted(missing)) + ".")
+    return StudySettings(
+        rest_times=_rest_times_from_values(values),
+        practice_targets_deg=_practice_targets(values["PRACTICE_TARGETS_DEG"]),
+        sensor4_from_object=_sensor4_from_object(values["SENSOR4_FROM_OBJECT"]),
+    )
 
 
 class RestSnapshot(NamedTuple):

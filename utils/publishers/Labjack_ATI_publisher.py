@@ -6,7 +6,7 @@ if __package__ in (None, ""):
 
 from utils.paths import CALIBRATION_DIR
 
-from datetime import time
+import time
 
 import rclpy
 from rclpy.executors import ExternalShutdownException
@@ -41,13 +41,34 @@ class LabjackATINode(Node):
 
         self.cal_path = CALIBRATION_DIR / 'FT44297.cal'
         self.publish_rate = 600.0
+        self.bias_time = self.declare_parameter('bias_time_sec', 5.0).value
+        self.bias_warmup = self.declare_parameter('bias_warmup_sec', 0.5).value
+        self.bias_timeout = self.declare_parameter('bias_timeout_sec', 15.0).value
+        self.compute_bias_on_start = self.declare_parameter('bias_on_start', True).value
+        self.raw_only = self.declare_parameter('raw_only', False).value
 
         self.ati_reader = LabjackATIReader(
             cal_path=self.cal_path,
             aq_rate=self.publish_rate,
-            bias_frames=30,
-            bias_switch=True
+            bias_time=self.bias_time,
+            bias_switch=not self.raw_only and self.compute_bias_on_start,
+            bias_warmup=self.bias_warmup,
+            bias_timeout=self.bias_timeout,
         )
+
+        if self.raw_only:
+            self.acquisition_pub_s3 = self.create_publisher(
+                Float64MultiArray,
+                '/ERIE_Manipulation/acquisition/wrench_s3_uncorrected',
+                1,
+            )
+            self.total_itr = 0
+            self.timer = self.create_timer(1.0 / self.publish_rate, self.timer_callback)
+            self.get_logger().info(
+                "LabJack acquisition-only mode: no local bias or TF; "
+                "start the central force processor for corrected output."
+            )
+            return
 
         # ─────────────────────────────────────────────────────────────────────
         # TF / Polhemus Viper frame names
@@ -173,6 +194,17 @@ class LabjackATINode(Node):
 
             if ft_arr is None:
                 self.get_logger().warn("No force data received from sensor 3. Skipping this sample.")
+                return
+
+            if self.raw_only:
+                values = np.asarray(ft_arr, dtype=np.float64)
+                if values.shape != (6,) or not np.isfinite(values).all():
+                    self.get_logger().warn("Invalid LabJack acquisition sample; expected 6 finite values.")
+                    return
+                # Source-host wall time at read completion, independent of /clock.
+                self.acquisition_pub_s3.publish(Float64MultiArray(
+                    data=np.append(values, time.time()).tolist()
+                ))
                 return
             
             if ft_arr.size < 6:

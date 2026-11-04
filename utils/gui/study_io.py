@@ -23,7 +23,16 @@ WRENCH_TOPICS = {f: f"/ERIE_Manipulation/force/wrench_s{s}_finger{s}" for f, s i
 RAW_TOPICS = {f: f"/ERIE_Manipulation/force/force_s{s}_raw" for f, s in SENSORS.items()}
 FORCE_TOPICS = {f: f"/ERIE_Manipulation/force/force_s{s}_finger{s}" for f, s in SENSORS.items()}
 FT_HEADER = ("source_timestamp_sec", "Fx", "Fy", "Fz", "Tx", "Ty", "Tz")
+AXIS_ERROR_HEADER = (
+    "source_timestamp_sec", "elapsed_sec", "step_rotation_deg", "step_angle_deg",
+    "accumulated_angle_deg", "axis_x", "axis_y", "axis_z", "axis_error_deg",
+    "continuous", "status",
+)
 STALE_SEC = 0.5
+FORCE_BIAS_SERVICE = "/ERIE_Manipulation/force/rebias"
+FORCE_BIAS_STATUS_TOPIC = "/ERIE_Manipulation/force/processing_status"
+FORCE_BIAS_STATUS_MAX_AGE = 2.0
+FORCE_BIAS_ACK_TIMEOUT = 3.0
 
 
 def utc_now():
@@ -61,6 +70,14 @@ def create_trial_directory(session, user, trial, when):
                             f"User{validate_user(user)}_Trial{trial.reference}_{when:%m%d%Y_%H%M}")
 
 
+def create_calibration_directory(session, user, trial, when):
+    """Reserve a rotation-range recording separate from measured trial data."""
+    return unique_directory(
+        Path(session) / "RotationCalibration",
+        f"User{validate_user(user)}_{trial.diameter_mm}mm_{trial.task}_{when:%m%d%Y_%H%M}",
+    )
+
+
 @dataclass(frozen=True)
 class PoseSample:
     quaternion: tuple
@@ -92,7 +109,7 @@ class TrialWriter:
 
     def add(self, kind, finger, values):
         with self.lock:
-            if not self.accepting:
+            if not self.accepting or (kind == "axis_error" and finger is not None):
                 return False
             try:
                 self.queue.put_nowait((kind, finger, tuple(values)))
@@ -133,7 +150,8 @@ class TrialWriter:
             specs = [(('wrench', f), f"{f}.csv", FT_HEADER) for f in FINGERS]
             specs += [(('raw', f), f"{f}_raw_force.csv", FT_HEADER) for f in FINGERS]
             specs += [(("pose", None), "object_orientation.csv", ("source_timestamp_sec", "qx", "qy", "qz", "qw")),
-                      (("progress", None), "rotation_progress.csv", ("source_timestamp_sec", "elapsed_sec", "angle_deg", "completed_cycles", "phase"))]
+                      (("progress", None), "rotation_progress.csv", ("source_timestamp_sec", "elapsed_sec", "angle_deg", "completed_cycles", "phase")),
+                      (("axis_error", None), "rotation_axis_error.csv", AXIS_ERROR_HEADER)]
             for key, name, header in specs:
                 stream = (self.path / name).open("x", newline="", buffering=65536)
                 files[key] = stream
@@ -243,7 +261,7 @@ class PreviewWriter:
                 self.raw_counts[finger] += 1
             elif kind == "pose" and finger is None:
                 self.pose_count += 1
-            elif kind != "progress" or finger is not None:
+            elif kind not in ("progress", "axis_error") or finger is not None:
                 return False
             return True
 
@@ -289,6 +307,20 @@ class ROSBridge:
         self.demo_motion_start = None
         self.demo_alignment = np.eye(3)
         self.demo_baseline = np.array([0.0, 0.0, 0.0, 1.0])
+        self._force_bias_status = None
+        self._force_bias_retired_processors = deque(maxlen=16)
+        self._force_bias_arrival = None
+        self._force_bias_service_ready = False
+        self._force_bias_pending = False
+        self._force_bias_queued = False
+        self._force_bias_sent_at = None
+        self._force_bias_baseline = None
+        self._force_bias_expected = None
+        self._force_bias_acknowledged = False
+        self._force_bias_ack_status_seq = None
+        self._force_bias_uncertain = False
+        self._force_bias_error = None
+        self._force_bias_future = None  # Accessed only by the ROS worker.
         self.thread = threading.Thread(target=self._run, daemon=True, name="study-ros")
         self.thread.start()
 
@@ -340,7 +372,242 @@ class ROSBridge:
                 rate = (len(arrivals) - 1) / (arrivals[-1] - arrivals[0]) if len(arrivals) > 1 and arrivals[-1] > arrivals[0] else 0.0
                 fingers[finger] = {"value": self.values[key], "arrival": self.times[key], "rate": rate,
                                    "force": self.values[("force", finger)], "force_arrival": self.times[("force", finger)]}
-            return {"fingers": fingers, "pose": self.pose, "pose_drops": self.pose_drops, "error": self.error}
+            return {"fingers": fingers, "pose": self.pose, "pose_drops": self.pose_drops,
+                    "error": self.error, "force_bias": self._force_bias_snapshot_locked(time.monotonic())}
+
+    def _force_bias_snapshot_locked(self, now):
+        status = self._force_bias_status
+        fresh = (status is not None and self._force_bias_arrival is not None
+                 and 0 <= now - self._force_bias_arrival <= FORCE_BIAS_STATUS_MAX_AGE)
+        stopped = self.stop_event.is_set()
+        available = bool(not self.demo and not stopped and fresh and self._force_bias_service_ready)
+        busy = bool(status and status["busy"] and not self.demo and not stopped)
+        pending = self._force_bias_pending and not stopped
+        state = status["state"] if status else "unavailable"
+        message = "Central force processing is unavailable. Start ATI_processing_node."
+        if self.demo:
+            state, message = "disabled", "Force bias is unavailable in demo mode."
+        elif stopped:
+            state, message = "disabled", "Force bias is unavailable after shutdown."
+        elif pending:
+            if self._force_bias_uncertain:
+                state = "uncertain"
+                message = ("Force-bias confirmation was lost; calibration may still be running. "
+                           "Waiting for current processing status. If confirmation does not recover, "
+                           "restart the central processor and GUI; acquisition nodes can stay running.")
+            elif self._force_bias_queued:
+                state, message = "requesting", "Force-bias request queued."
+            elif not self._force_bias_acknowledged:
+                state, message = "requesting", "Requesting force bias; keep all sensors unloaded and still."
+            else:
+                message = "Force bias is running; keep all sensors unloaded and still."
+            if not fresh:
+                message += " Processing status is missing; recording remains blocked."
+        elif status and not available:
+            state, message = "stale", "Force processing is disconnected or its status is stale."
+        elif available:
+            message = {"idle": "Ready to request force bias.",
+                       "waiting": "Waiting for fresh readings from all three sensors.",
+                       "warming": "Force-bias warmup; keep all sensors unloaded and still.",
+                       "collecting": "Collecting force bias; keep all sensors unloaded and still.",
+                       "ready": "Force bias completed; all three sensor offsets are active.",
+                       "failed": "Force bias failed; check the error and retry."}[state]
+        error = self._force_bias_error or (status["last_error"] if status and not pending else None)
+        if error and not pending:
+            message = error
+        return {"available": available, "pending": bool(pending), "busy": busy, "state": state,
+                "ready": bool(status and status["ready"] and available and not busy and not pending),
+                "generation": status["generation"] if status else None,
+                "processor_id": status["processor_id"] if status else None,
+                "request_id": status["request_id"] if status else None,
+                "status_seq": status["status_seq"] if status else None,
+                "sample_counts": dict(status["sample_counts"]) if status else {},
+                "last_error": error, "message": message}
+
+    def request_force_bias(self):
+        """Queue a tare without calling ROS from Tk's thread or blocking it."""
+        with self.lock:
+            status = self._force_bias_snapshot_locked(time.monotonic())
+            if (not status["available"] or status["pending"] or status["busy"]
+                    or self.writer is not None):
+                return False
+            self._force_bias_pending = self._force_bias_queued = True
+            self._force_bias_acknowledged = self._force_bias_uncertain = False
+            self._force_bias_ack_status_seq = None
+            self._force_bias_error = None
+            self._force_bias_sent_at = self._force_bias_baseline = self._force_bias_expected = None
+            return True
+
+    @staticmethod
+    def _parse_force_bias_status(data):
+        status = json.loads(data)
+        if not isinstance(status, dict):
+            raise ValueError("Force-bias status must be an object")
+        state = status.get("state")
+        if state not in ("idle", "waiting", "warming", "collecting", "ready", "failed"):
+            raise ValueError("Unknown force-bias state")
+        if type(status.get("busy")) is not bool or type(status.get("ready")) is not bool:
+            raise ValueError("Invalid force-bias flags")
+        if status["busy"] != (state in ("waiting", "warming", "collecting")):
+            raise ValueError("Inconsistent force-bias phase")
+        if state == "ready" and not status["ready"]:
+            raise ValueError("Completed bias is not ready")
+        for field in ("generation", "request_id", "status_seq"):
+            if type(status.get(field)) is not int or status[field] < 0:
+                raise ValueError("Invalid force-bias transaction identifier")
+        if not isinstance(status.get("processor_id"), str) or not status["processor_id"]:
+            raise ValueError("Missing force-processing instance identifier")
+        counts = status.get("sample_counts")
+        if (not isinstance(counts, dict) or set(counts) != {"1", "2", "3"}
+                or any(type(value) is not int or value < 0 for value in counts.values())):
+            raise ValueError("Invalid force-bias sample counts")
+        if status.get("last_error") is not None and not isinstance(status["last_error"], str):
+            raise ValueError("Invalid force-bias error")
+        return {**status, "sample_counts": dict(counts), "last_error": status.get("last_error")}
+
+    def sample_force_bias_status(self, data, arrival=None):
+        """Accept ordered, identified status heartbeats from the processing node."""
+        arrival = time.monotonic() if arrival is None else arrival
+        try:
+            status = self._parse_force_bias_status(data)
+        except (ValueError, TypeError, OverflowError):
+            return False
+        with self.lock:
+            old = self._force_bias_status
+            if status["processor_id"] in self._force_bias_retired_processors:
+                return False
+            if old and old["processor_id"] == status["processor_id"]:
+                if (status["status_seq"] <= old["status_seq"]
+                        or status["request_id"] < old["request_id"]
+                        or status["generation"] < old["generation"]):
+                    return False
+            elif old:
+                self._force_bias_retired_processors.append(old["processor_id"])
+                if self._force_bias_pending:
+                    self._force_bias_pending = self._force_bias_queued = False
+                    self._force_bias_error = "Force processor restarted; request force bias again."
+            self._force_bias_status = status
+            self._force_bias_arrival = arrival
+            self._resolve_force_bias_locked(arrival)
+        return True
+
+    def _resolve_force_bias_locked(self, now=None):
+        now = time.monotonic() if now is None else now
+        status, baseline = self._force_bias_status, self._force_bias_baseline
+        if (not self._force_bias_pending or self._force_bias_sent_at is None
+                or status is None or baseline is None
+                or status["status_seq"] <= baseline["status_seq"]
+                or self._force_bias_arrival is None
+                or not 0 <= now - self._force_bias_arrival <= FORCE_BIAS_STATUS_MAX_AGE
+                or not (self._force_bias_acknowledged or self._force_bias_uncertain)):
+            return
+        expected_processor, expected_request = self._force_bias_expected
+        if status["processor_id"] != expected_processor:
+            return
+        if status["request_id"] > expected_request:
+            self._force_bias_pending = False
+            self._force_bias_error = "Another force-bias request superseded this request; check the current processing status."
+            return
+        if (status["request_id"] != expected_request
+                or (self._force_bias_ack_status_seq is not None
+                    and status["status_seq"] <= self._force_bias_ack_status_seq)):
+            return
+        if status["busy"]:
+            return
+        if status["state"] == "ready" and status["generation"] > baseline["generation"]:
+            self._force_bias_pending = False
+            self._force_bias_error = None
+        elif status["state"] == "failed":
+            self._force_bias_pending = False
+            self._force_bias_error = status["last_error"] or "Force bias failed; check sensor input and retry."
+
+    def _poll_force_bias(self, client, request_factory, now=None):
+        """Run service readiness, dispatch and future polling on the ROS worker."""
+        now = time.monotonic() if now is None else now
+        ready = bool(client.service_is_ready())
+        with self.lock:
+            self._force_bias_service_ready = ready
+            queued = self._force_bias_queued
+            if queued:
+                self._force_bias_queued = False
+                current = self._force_bias_snapshot_locked(now)
+                if not current["available"] or current["busy"] or self.stop_event.is_set():
+                    self._force_bias_pending = False
+                    self._force_bias_error = "Force-bias request was not sent; check the processing node and retry."
+                    queued = False
+                else:
+                    self._force_bias_baseline = dict(self._force_bias_status)
+                    self._force_bias_expected = (self._force_bias_status["processor_id"],
+                                                 self._force_bias_status["request_id"] + 1)
+                    self._force_bias_sent_at = now
+        if queued:
+            self._cancel_force_bias_future(client)
+            try:
+                self._force_bias_future = client.call_async(request_factory())
+            except Exception as exc:
+                with self.lock:
+                    self._force_bias_pending = False
+                    self._force_bias_error = f"Force-bias request failed: {exc}. Retry after checking ROS."
+                return
+        future = self._force_bias_future
+        if future is None:
+            return
+        if future.done():
+            self._force_bias_future = None
+            try:
+                response = future.result()
+            except Exception as exc:
+                with self.lock:
+                    if self._force_bias_pending:
+                        self._force_bias_uncertain = True
+                        self._force_bias_error = f"Force-bias response lost: {exc}. Waiting for processing status."
+                        self._resolve_force_bias_locked(now)
+                return
+            with self.lock:
+                if not self._force_bias_pending:
+                    return
+                if not response.success:
+                    self._force_bias_pending = False
+                    self._force_bias_error = response.message or "Force-bias request rejected; check the processing node."
+                else:
+                    try:
+                        acknowledgement = json.loads(response.message)
+                        processor = acknowledgement["processor_id"]
+                        request_id = acknowledgement["request_id"]
+                        status_seq = acknowledgement["status_seq"]
+                        if (not isinstance(processor, str) or not processor
+                                or type(request_id) is not int or request_id < 1
+                                or type(status_seq) is not int or status_seq < 1
+                                or processor != self._force_bias_baseline["processor_id"]
+                                or request_id <= self._force_bias_baseline["request_id"]
+                                or status_seq <= self._force_bias_baseline["status_seq"]):
+                            raise ValueError("Invalid force-bias acknowledgement")
+                        self._force_bias_expected = processor, request_id
+                        self._force_bias_ack_status_seq = status_seq
+                    except (ValueError, TypeError, KeyError):
+                        self._force_bias_uncertain = True
+                        self._force_bias_error = "Force-bias response has no transaction ID; waiting for processing status."
+                    else:
+                        self._force_bias_acknowledged = True
+                        self._force_bias_uncertain = False
+                        self._force_bias_error = None
+                    self._resolve_force_bias_locked(now)
+        else:
+            with self.lock:
+                if (self._force_bias_pending and self._force_bias_sent_at is not None
+                        and now - self._force_bias_sent_at >= FORCE_BIAS_ACK_TIMEOUT):
+                    self._force_bias_uncertain = True
+                    self._force_bias_error = "Force-bias response timed out; waiting for current processing status."
+                    self._resolve_force_bias_locked(now)
+
+    def _cancel_force_bias_future(self, client):
+        """Release a local service future; this never stops the remote processor."""
+        future, self._force_bias_future = self._force_bias_future, None
+        if future is not None:
+            try:
+                future.cancel()
+            finally:
+                client.remove_pending_request(future)
 
     def drain_poses(self):
         with self.lock:
@@ -356,7 +623,7 @@ class ROSBridge:
     def begin(self, writer, axis, target, alignment=None, baseline=None):
         """Begin recording, with demo poses expressed using the real trial frames.
 
-        alignment maps mesh axes to sensor4 axes; baseline is the sensor4 xyzw
+        alignment maps object/mesh axes to sensor4 axes; baseline is the sensor4 xyzw
         quaternion captured at trial start. Omitted frames retain the original
         identity-frame demo behavior.
         """
@@ -370,6 +637,9 @@ class ROSBridge:
             raise ValueError("Demo alignment must be a proper 3 by 3 rotation matrix.")
         baseline = normalize_quaternion([0, 0, 0, 1] if baseline is None else baseline)
         with self.lock:
+            bias_status = self._force_bias_snapshot_locked(time.monotonic())
+            if bias_status["pending"] or bias_status["busy"]:
+                raise ValueError("Wait for force bias to finish before starting a recording.")
             self.poses.clear()
             self.writer = writer
             self.demo_axis = axis
@@ -432,7 +702,7 @@ class ROSBridge:
         if self.demo:
             self._run_demo()
             return
-        context = node = executor = None
+        context = node = executor = bias_client = None
         external_shutdown = ()
         try:
             import rclpy
@@ -442,7 +712,8 @@ class ROSBridge:
             from rclpy.node import Node
             from rclpy.signals import SignalHandlerOptions
             from rclpy.time import Time
-            from std_msgs.msg import Float64MultiArray
+            from std_msgs.msg import Float64MultiArray, String
+            from std_srvs.srv import Trigger
             external_shutdown = (ExternalShutdownException,)
             context = Context()
             # The main GUI owns SIGINT/SIGTERM so it can save the active trial
@@ -457,6 +728,10 @@ class ROSBridge:
                     def receive(message, kind=kind, finger=finger):
                         self.sample_force(kind, finger, message.data)
                     subscriptions.append(node.create_subscription(Float64MultiArray, topic, receive, 1000))
+            subscriptions.append(node.create_subscription(
+                String, FORCE_BIAS_STATUS_TOPIC,
+                lambda message: self.sample_force_bias_status(message.data), 10))
+            bias_client = node.create_client(Trigger, FORCE_BIAS_SERVICE)
             buffer = tf2_ros.Buffer()
             listener = tf2_ros.TransformListener(buffer, node, spin_thread=False)
             last_stamp = None
@@ -479,6 +754,7 @@ class ROSBridge:
             self.events.put(("info", "ROS connected. Waiting for sensor4 and finger-frame F/T streams."))
             while not self.stop_event.is_set() and context.ok():
                 executor.spin_once(timeout_sec=.05)
+                self._poll_force_bias(bias_client, Trigger.Request)
         except external_shutdown:
             # Context shutdown is a normal way for the executor to stop.
             pass
@@ -486,9 +762,13 @@ class ROSBridge:
             self.error = repr(exc)
             self.events.put(("error", "ROS connection failed: " + self.error))
         finally:
+            with self.lock:
+                self._force_bias_service_ready = False
+                self._force_bias_pending = self._force_bias_queued = False
             # Attempt every cleanup even if a preceding resource reports an
             # error. In particular, a node failure must not strand its context.
             for name, resource, close in (
+                ("force-bias request", bias_client, self._cancel_force_bias_future),
                 ("executor", executor, lambda value: value.shutdown()),
                 ("node", node, lambda value: value.destroy_node()),
                 ("context", context, lambda value: value.try_shutdown()),

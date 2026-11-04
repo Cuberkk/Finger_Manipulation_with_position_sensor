@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+import time
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -7,6 +8,7 @@ if __package__ in (None, ""):
 from utils.paths import CALIBRATION_DIR
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.time import Time
 import tf2_ros
 import numpy as np
@@ -23,7 +25,14 @@ class NIDAQATINode(Node):
 
     def __init__(self):
         super().__init__('nidaq_ati_node')
+        self.nidaq_reader = None
+        try:
+            self._initialize()
+        except BaseException:
+            self.destroy_node()
+            raise
 
+    def _initialize(self):
         # ─────────────────────────────────────────────────────────────────────
         # NI-DAQ / ATI settings
         # ─────────────────────────────────────────────────────────────────────
@@ -38,9 +47,44 @@ class NIDAQATINode(Node):
         # Publish/read rate in Hz.
         self.publish_rate = 600.0
 
-        # Bias settings.
-        self.bias_time = 5
-        self.compute_bias_on_start = True
+        # Hardware-timed zero calibration, configured before opening the device.
+        self.bias_time = self.declare_parameter('bias_time_sec', 5.0).value
+        self.bias_warmup = self.declare_parameter('bias_warmup_sec', 0.5).value
+        self.bias_timeout = self.declare_parameter('bias_timeout_sec', 15.0).value
+        self.compute_bias_on_start = self.declare_parameter('bias_on_start', True).value
+        self.raw_only = self.declare_parameter('raw_only', False).value
+
+        self.nidaq_reader = NIDAQReaderDual(
+            cal1_path=self.cal1_path,
+            cal2_path=self.cal2_path,
+            aq_rate=self.publish_rate,
+            phys=self.phys_channels,
+            bias_time=self.bias_time,
+            bias_switch=not self.raw_only and self.compute_bias_on_start,
+            bias_warmup=self.bias_warmup,
+            bias_timeout=self.bias_timeout,
+        )
+
+        if self.raw_only:
+            # Acquisition topics always contain calibrated, un-biased ATI axes.
+            # Legacy topics remain owned by the central processor in this mode.
+            self.acquisition_pub_s1 = self.create_publisher(
+                Float64MultiArray,
+                '/ERIE_Manipulation/acquisition/wrench_s1_uncorrected',
+                1,
+            )
+            self.acquisition_pub_s2 = self.create_publisher(
+                Float64MultiArray,
+                '/ERIE_Manipulation/acquisition/wrench_s2_uncorrected',
+                1,
+            )
+            self.total_itr = 0
+            self.timer = self.create_timer(1.0 / self.publish_rate, self.timer_callback)
+            self.get_logger().info(
+                "NI-DAQ acquisition-only mode: no local bias or TF; "
+                "start the central force processor for corrected output."
+            )
+            return
 
         # ─────────────────────────────────────────────────────────────────────
         # TF / Polhemus Viper frame names
@@ -101,19 +145,6 @@ class NIDAQATINode(Node):
 
         # Maximum allowed TF transform age in seconds.
         self.trans_delay = 1.5
-
-        # ─────────────────────────────────────────────────────────────────────
-        # NI-DAQ reader
-        # ─────────────────────────────────────────────────────────────────────
-
-        self.nidaq_reader = NIDAQReaderDual(
-            cal1_path=self.cal1_path,
-            cal2_path=self.cal2_path,
-            aq_rate=self.publish_rate,
-            phys=self.phys_channels,
-            bias_time=self.bias_time,
-            bias_switch=self.compute_bias_on_start,
-        )
 
         # ─────────────────────────────────────────────────────────────────────
         # ROS publisher and timer
@@ -206,6 +237,22 @@ class NIDAQATINode(Node):
         #  Fx2,Fy2,Fz2,Tx2,Ty2,Tz2]
         ft_arr = self.nidaq_reader.read()
         if ft_arr is False:
+            return
+
+        if self.raw_only:
+            values = np.asarray(ft_arr, dtype=np.float64)
+            if values.shape != (12,) or not np.isfinite(values).all():
+                self.get_logger().warn("Invalid NI-DAQ acquisition sample; expected 12 finite values.")
+                return
+            # Source-host wall time at read completion, independent of /clock.
+            # This is not a hardware acquisition timestamp.
+            timestamp_sec = time.time()
+            self.acquisition_pub_s1.publish(Float64MultiArray(
+                data=np.append(values[:6], timestamp_sec).tolist()
+            ))
+            self.acquisition_pub_s2.publish(Float64MultiArray(
+                data=np.append(values[6:], timestamp_sec).tolist()
+            ))
             return
         
         # Reader returns 12 values:
@@ -566,34 +613,35 @@ class NIDAQATINode(Node):
         )
 
     def destroy_node(self):
-        """
-        Close NI task before shutting down ROS node.
-        """
-
+        """Close the NI task, including after interrupted bias initialization."""
+        reader = getattr(self, 'nidaq_reader', None)
+        self.nidaq_reader = None
         try:
-            self.nidaq_reader.close()
-        except Exception:
-            pass
-
-        super().destroy_node()
+            if reader is not None:
+                reader.close()
+        except Exception as exc:
+            self.get_logger().warn(f"NI-DAQ cleanup failed: {exc}")
+        finally:
+            super().destroy_node()
 
 
 def main(args=None):
-    rclpy.init(args=args)
-
-    node = NIDAQATINode()
-
+    node = None
     try:
+        rclpy.init(args=args)
+        node = NIDAQATINode()
         rclpy.spin(node)
 
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         print("Shutting down NI-DAQ ATI + Polhemus Finger Position Node...")
 
     finally:
-        node.destroy_node()
-
-        if rclpy.ok():
-            rclpy.shutdown()
+        try:
+            if node is not None:
+                node.destroy_node()
+        finally:
+            if rclpy.ok():
+                rclpy.shutdown()
 
 
 if __name__ == '__main__':
