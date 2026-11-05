@@ -30,7 +30,7 @@ class LabjackATINode(Node):
 
     def _initialize(self):
         self.cal_path = CALIBRATION_DIR / 'FT44297.cal'
-        self.publish_rate = 600.0
+        self.publish_rate = 350.0
         self.ati_reader = LabjackATIReader(
             cal_path=self.cal_path,
             aq_rate=self.publish_rate,
@@ -43,7 +43,7 @@ class LabjackATINode(Node):
         )
         self.timer = self.create_timer(1.0 / self.publish_rate, self.timer_callback)
         self.get_logger().info(
-            "LabJack publishes ATI force/torque without bias subtraction; "
+            f"LabJack targets {self.publish_rate:g} Hz and publishes ATI force/torque without bias subtraction; "
             "start the central force processor for bias and coordinate transforms."
         )
 

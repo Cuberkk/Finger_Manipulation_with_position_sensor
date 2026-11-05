@@ -45,8 +45,9 @@ torque. Linux owns the bias for all three sensors and applies the Polhemus
 coordinate transforms. The Windows computer requires no bias commands or bias
 file transfers during the experiment.
 
-The NI-DAQ and LabJack publishers, including their device readers, perform only
-device acquisition, ATI factory calibration, sample validation and publication.
+The NI-DAQ and LabJack force pipelines perform device acquisition, ATI factory
+calibration, sample validation and publication. Both acquisition nodes request
+**350 Hz** hardware sampling and use a **1/350-second** publication timer.
 They always send uncorrected sensor-frame force/torque. They have no local bias
 computation, bias vector, bias-file access, warmup window or TF transformation.
 The former direct-processing mode and hardware-node bias parameters have been
@@ -59,14 +60,14 @@ First start NI-DAQ in the Windows repository root:
 python -m utils.publishers.NIDAQ_ATI_publisher
 ```
 
-The NI-DAQ node also subscribes to `/tf` with an empty callback to test whether
-incoming TF messages improve executor wakeup timing on Windows. This subscription
-is always enabled, including in the diagnostic entry point below. It requires
-the ROS `tf2_msgs` package and a live Polhemus `/tf` stream reachable from Windows
-to provide those wakeups. It does not look up or apply transforms. Restart the
-NI-DAQ publisher after updating and compare the same acquisition topic's rate.
+The NI-DAQ node subscribes to `/tf` with an empty callback so incoming messages
+can wake the executor. This wakeup subscription is always enabled, including in
+the diagnostic entry point below. It uses `tf2_msgs` and requires the live Polhemus
+`/tf` stream to reach Windows. The acquisition node performs no TF lookup or
+coordinate transformation. Restart both acquisition publishers after updating
+to apply the 350 Hz setting.
 
-If NI-DAQ topics appear slower than the configured 600 Hz, stop the normal
+If NI-DAQ topics appear slower than the configured 350 Hz, stop the normal
 NI-DAQ publisher and run this diagnostic entry point **on the Windows acquisition
 computer**, in the same environment:
 
@@ -85,17 +86,39 @@ existing latest-scan policy. The diagnostic does not change that policy or the
 force values and source timestamps. It adds measurement overhead, so compare it
 with the normal entry point after diagnosis.
 
+`tf_messages_hz` confirms that `/tf` messages actually reach the acquisition node.
+A zero value means the wakeup subscription is not receiving dynamic TF messages.
+`reader_mean_ms` times the complete device-reader call, including the buffer
+availability query and calibration; `read_mean_ms` times only `task.read`.
+Use both alongside `publish_mean_ms` and `callback_mean_ms` to locate time spent
+inside the callback.
+
+If the rate remains low, compare the baseline diagnostic above with this second
+run on Windows, after stopping the first run:
+
+```powershell
+python -m utils.diagnostics.nidaq_rate --interval 5 --windows-timer-ms 1
+```
+
+This requests a 1 ms timer resolution using Windows `timeBeginPeriod` for the
+diagnostic process and pairs it with `timeEndPeriod` on exit, including errors
+and Ctrl+C. The ordinary publisher does not make this request. An accepted
+request does not guarantee a particular callback frequency: compare the measured
+rates. The experiment tests timer waiting without changing device sampling,
+sample selection or publication. Windows documents this API and its limitations
+in [timeBeginPeriod](https://learn.microsoft.com/en-us/windows/win32/api/timeapi/nf-timeapi-timebeginperiod).
+
 | Example source-side result | What to investigate |
 | --- | --- |
-| About 75 callbacks/s, 600 drained scans/s, mean batch 8, short callbacks | Timer scheduling on the acquisition host |
-| About 600 callbacks/s, 75 batches/s, mean batch 8 | Device/driver buffer updates or transfer batching |
-| About 75 callbacks/s, long `publish_mean_ms` | DDS publication blocking, including possible network/subscriber effects |
-| About 600 successful publish calls/s, Linux receives about 75/s | Transport, subscriber QoS or measurement overhead |
+| About 70 callbacks/s, 350 drained scans/s, mean batch 5, short callbacks | Timer scheduling on the acquisition host |
+| About 350 callbacks/s, 70 batches/s, mean batch 5 | Device/driver buffer updates or transfer batching |
+| About 70 callbacks/s, long `publish_mean_ms` | DDS publication blocking, including possible network/subscriber effects |
+| About 350 successful publish calls/s, Linux receives about 70/s | Transport, subscriber QoS or measurement overhead |
 
-Windows and Linux both reporting 75 Hz with `ros2 topic hz` does not distinguish
+Windows and Linux both reporting 70 Hz with `ros2 topic hz` does not distinguish
 these cases: the command measures its own subscription's receiving rate. In the
 first two examples, the original reader publishes just the last scan from each
-batch, so 600 hardware scans/s need not produce 600 messages/s per topic.
+batch, so 350 hardware scans/s need not produce 350 messages/s per topic.
 
 On Linux, start LabJack in a separate terminal and start the existing Polhemus TF
 stream as usual:

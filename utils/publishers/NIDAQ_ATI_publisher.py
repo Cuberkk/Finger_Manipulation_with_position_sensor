@@ -34,7 +34,7 @@ class NIDAQATINode(Node):
         self.cal1_path = CALIBRATION_DIR / 'FT44298.cal'
         self.cal2_path = CALIBRATION_DIR / 'FT45281.cal'
         self.phys_channels = 'Dev1/ai0:7,Dev1/ai16:19'
-        self.publish_rate = 600.0
+        self.publish_rate = 350.0
         self.nidaq_reader = NIDAQReaderDual(
             cal1_path=self.cal1_path,
             cal2_path=self.cal2_path,
@@ -52,16 +52,15 @@ class NIDAQATINode(Node):
             '/ERIE_Manipulation/acquisition/wrench_s2_uncorrected',
             1,
         )
-        # Incoming TF messages provide another executor wakeup source. This
-        # tests scheduling effects without moving transforms into acquisition.
+        # Incoming TF messages provide another executor wakeup source.
         self.tf_wakeup_subscription = self.create_subscription(
             TFMessage, '/tf', self._on_tf_wakeup, qos_profile_sensor_data,
         )
         self.timer = self.create_timer(1.0 / self.publish_rate, self.timer_callback)
         self.get_logger().info(
-            "NI-DAQ publishes ATI force/torque without bias subtraction; "
+            f"NI-DAQ targets {self.publish_rate:g} Hz and publishes ATI force/torque without bias subtraction; "
             "start the central force processor for bias and coordinate transforms. "
-            "A /tf no-op subscription is enabled to test executor wakeups."
+            "A /tf no-op subscription is enabled for executor wakeups."
         )
 
     def _on_tf_wakeup(self, _message):

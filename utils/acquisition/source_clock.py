@@ -1,7 +1,7 @@
 """Read-completion timestamps from the source computer's UTC system clock.
 
-Python before 3.13 can expose a coarse Windows ``time.time()`` clock. At the
-600 Hz acquisition rate that can assign one timestamp to several readings.
+Python before 3.13 can expose a coarse Windows ``time.time()`` clock. At high
+acquisition rates that can assign one timestamp to several readings.
 Use Windows' precise system-time API directly, while retaining true clock
 adjustments so the central processor can detect backward jumps.
 """
