@@ -1,0 +1,422 @@
+{
+  "user_number": "001",
+  "started_local": "2026-11-04T18:44:58.860241-05:00",
+  "timezone": "America/New_York",
+  "demo": false,
+  "protocol_file": "/home/erie_lab/Documents/kxz365/Github_repos/Finger_manipulation_with_Polhemus/docs/user_study_docs/Trials_lookup.csv",
+  "rest_config_file": "/home/erie_lab/Documents/kxz365/Github_repos/Finger_manipulation_with_Polhemus/docs/user_study_docs/Rest_Time.py",
+  "rest_seconds": {
+    "trials_sec": 60,
+    "tasks_sec": 120,
+    "objects_sec": 300
+  },
+  "practice_targets_deg": {
+    "50": 20.0,
+    "80": 10.0
+  },
+  "object_to_sensor4_matrix": [
+    [
+      -0.5,
+      0.8660254037844386,
+      0.0
+    ],
+    [
+      0.8660254037844386,
+      0.5,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      -1.0
+    ]
+  ],
+  "storage_layout_version": 2,
+  "participant_directory": "User001",
+  "trials": [
+    {
+      "reference": "P00",
+      "code": "50RPractice",
+      "diameter_mm": 50,
+      "task": "roll",
+      "repetition": null,
+      "practice": true
+    },
+    {
+      "reference": "00",
+      "code": "50R0",
+      "diameter_mm": 50,
+      "task": "roll",
+      "repetition": 0,
+      "practice": false
+    },
+    {
+      "reference": "01",
+      "code": "50R1",
+      "diameter_mm": 50,
+      "task": "roll",
+      "repetition": 1,
+      "practice": false
+    },
+    {
+      "reference": "02",
+      "code": "50R2",
+      "diameter_mm": 50,
+      "task": "roll",
+      "repetition": 2,
+      "practice": false
+    },
+    {
+      "reference": "03",
+      "code": "50R3",
+      "diameter_mm": 50,
+      "task": "roll",
+      "repetition": 3,
+      "practice": false
+    },
+    {
+      "reference": "04",
+      "code": "50R4",
+      "diameter_mm": 50,
+      "task": "roll",
+      "repetition": 4,
+      "practice": false
+    },
+    {
+      "reference": "P01",
+      "code": "50PPractice",
+      "diameter_mm": 50,
+      "task": "pitch",
+      "repetition": null,
+      "practice": true
+    },
+    {
+      "reference": "05",
+      "code": "50P0",
+      "diameter_mm": 50,
+      "task": "pitch",
+      "repetition": 0,
+      "practice": false
+    },
+    {
+      "reference": "06",
+      "code": "50P1",
+      "diameter_mm": 50,
+      "task": "pitch",
+      "repetition": 1,
+      "practice": false
+    },
+    {
+      "reference": "07",
+      "code": "50P2",
+      "diameter_mm": 50,
+      "task": "pitch",
+      "repetition": 2,
+      "practice": false
+    },
+    {
+      "reference": "08",
+      "code": "50P3",
+      "diameter_mm": 50,
+      "task": "pitch",
+      "repetition": 3,
+      "practice": false
+    },
+    {
+      "reference": "09",
+      "code": "50P4",
+      "diameter_mm": 50,
+      "task": "pitch",
+      "repetition": 4,
+      "practice": false
+    },
+    {
+      "reference": "P02",
+      "code": "50YPractice",
+      "diameter_mm": 50,
+      "task": "yaw",
+      "repetition": null,
+      "practice": true
+    },
+    {
+      "reference": "10",
+      "code": "50Y0",
+      "diameter_mm": 50,
+      "task": "yaw",
+      "repetition": 0,
+      "practice": false
+    },
+    {
+      "reference": "11",
+      "code": "50Y1",
+      "diameter_mm": 50,
+      "task": "yaw",
+      "repetition": 1,
+      "practice": false
+    },
+    {
+      "reference": "12",
+      "code": "50Y2",
+      "diameter_mm": 50,
+      "task": "yaw",
+      "repetition": 2,
+      "practice": false
+    },
+    {
+      "reference": "13",
+      "code": "50Y3",
+      "diameter_mm": 50,
+      "task": "yaw",
+      "repetition": 3,
+      "practice": false
+    },
+    {
+      "reference": "14",
+      "code": "50Y4",
+      "diameter_mm": 50,
+      "task": "yaw",
+      "repetition": 4,
+      "practice": false
+    },
+    {
+      "reference": "P03",
+      "code": "50GPractice",
+      "diameter_mm": 50,
+      "task": "finger_gating",
+      "repetition": null,
+      "practice": true
+    },
+    {
+      "reference": "15",
+      "code": "50G0",
+      "diameter_mm": 50,
+      "task": "finger_gating",
+      "repetition": 0,
+      "practice": false
+    },
+    {
+      "reference": "16",
+      "code": "50G1",
+      "diameter_mm": 50,
+      "task": "finger_gating",
+      "repetition": 1,
+      "practice": false
+    },
+    {
+      "reference": "17",
+      "code": "50G2",
+      "diameter_mm": 50,
+      "task": "finger_gating",
+      "repetition": 2,
+      "practice": false
+    },
+    {
+      "reference": "18",
+      "code": "50G3",
+      "diameter_mm": 50,
+      "task": "finger_gating",
+      "repetition": 3,
+      "practice": false
+    },
+    {
+      "reference": "19",
+      "code": "50G4",
+      "diameter_mm": 50,
+      "task": "finger_gating",
+      "repetition": 4,
+      "practice": false
+    },
+    {
+      "reference": "P04",
+      "code": "80RPractice",
+      "diameter_mm": 80,
+      "task": "roll",
+      "repetition": null,
+      "practice": true
+    },
+    {
+      "reference": "20",
+      "code": "80R0",
+      "diameter_mm": 80,
+      "task": "roll",
+      "repetition": 0,
+      "practice": false
+    },
+    {
+      "reference": "21",
+      "code": "80R1",
+      "diameter_mm": 80,
+      "task": "roll",
+      "repetition": 1,
+      "practice": false
+    },
+    {
+      "reference": "22",
+      "code": "80R2",
+      "diameter_mm": 80,
+      "task": "roll",
+      "repetition": 2,
+      "practice": false
+    },
+    {
+      "reference": "23",
+      "code": "80R3",
+      "diameter_mm": 80,
+      "task": "roll",
+      "repetition": 3,
+      "practice": false
+    },
+    {
+      "reference": "24",
+      "code": "80R4",
+      "diameter_mm": 80,
+      "task": "roll",
+      "repetition": 4,
+      "practice": false
+    },
+    {
+      "reference": "P05",
+      "code": "80PPractice",
+      "diameter_mm": 80,
+      "task": "pitch",
+      "repetition": null,
+      "practice": true
+    },
+    {
+      "reference": "25",
+      "code": "80P0",
+      "diameter_mm": 80,
+      "task": "pitch",
+      "repetition": 0,
+      "practice": false
+    },
+    {
+      "reference": "26",
+      "code": "80P1",
+      "diameter_mm": 80,
+      "task": "pitch",
+      "repetition": 1,
+      "practice": false
+    },
+    {
+      "reference": "27",
+      "code": "80P2",
+      "diameter_mm": 80,
+      "task": "pitch",
+      "repetition": 2,
+      "practice": false
+    },
+    {
+      "reference": "28",
+      "code": "80P3",
+      "diameter_mm": 80,
+      "task": "pitch",
+      "repetition": 3,
+      "practice": false
+    },
+    {
+      "reference": "29",
+      "code": "80P4",
+      "diameter_mm": 80,
+      "task": "pitch",
+      "repetition": 4,
+      "practice": false
+    },
+    {
+      "reference": "P06",
+      "code": "80YPractice",
+      "diameter_mm": 80,
+      "task": "yaw",
+      "repetition": null,
+      "practice": true
+    },
+    {
+      "reference": "30",
+      "code": "80Y0",
+      "diameter_mm": 80,
+      "task": "yaw",
+      "repetition": 0,
+      "practice": false
+    },
+    {
+      "reference": "31",
+      "code": "80Y1",
+      "diameter_mm": 80,
+      "task": "yaw",
+      "repetition": 1,
+      "practice": false
+    },
+    {
+      "reference": "32",
+      "code": "80Y2",
+      "diameter_mm": 80,
+      "task": "yaw",
+      "repetition": 2,
+      "practice": false
+    },
+    {
+      "reference": "33",
+      "code": "80Y3",
+      "diameter_mm": 80,
+      "task": "yaw",
+      "repetition": 3,
+      "practice": false
+    },
+    {
+      "reference": "34",
+      "code": "80Y4",
+      "diameter_mm": 80,
+      "task": "yaw",
+      "repetition": 4,
+      "practice": false
+    },
+    {
+      "reference": "P07",
+      "code": "80GPractice",
+      "diameter_mm": 80,
+      "task": "finger_gating",
+      "repetition": null,
+      "practice": true
+    },
+    {
+      "reference": "35",
+      "code": "80G0",
+      "diameter_mm": 80,
+      "task": "finger_gating",
+      "repetition": 0,
+      "practice": false
+    },
+    {
+      "reference": "36",
+      "code": "80G1",
+      "diameter_mm": 80,
+      "task": "finger_gating",
+      "repetition": 1,
+      "practice": false
+    },
+    {
+      "reference": "37",
+      "code": "80G2",
+      "diameter_mm": 80,
+      "task": "finger_gating",
+      "repetition": 2,
+      "practice": false
+    },
+    {
+      "reference": "38",
+      "code": "80G3",
+      "diameter_mm": 80,
+      "task": "finger_gating",
+      "repetition": 3,
+      "practice": false
+    },
+    {
+      "reference": "39",
+      "code": "80G4",
+      "diameter_mm": 80,
+      "task": "finger_gating",
+      "repetition": 4,
+      "practice": false
+    }
+  ]
+}

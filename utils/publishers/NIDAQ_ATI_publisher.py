@@ -10,7 +10,9 @@ import numpy as np
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Float64MultiArray
+from tf2_msgs.msg import TFMessage
 
 from utils.paths import CALIBRATION_DIR
 from utils.acquisition.NIDAQReaderDual import NIDAQReaderDual
@@ -50,11 +52,21 @@ class NIDAQATINode(Node):
             '/ERIE_Manipulation/acquisition/wrench_s2_uncorrected',
             1,
         )
+        # Incoming TF messages provide another executor wakeup source. This
+        # tests scheduling effects without moving transforms into acquisition.
+        self.tf_wakeup_subscription = self.create_subscription(
+            TFMessage, '/tf', self._on_tf_wakeup, qos_profile_sensor_data,
+        )
         self.timer = self.create_timer(1.0 / self.publish_rate, self.timer_callback)
         self.get_logger().info(
             "NI-DAQ publishes ATI force/torque without bias subtraction; "
-            "start the central force processor for bias and coordinate transforms."
+            "start the central force processor for bias and coordinate transforms. "
+            "A /tf no-op subscription is enabled to test executor wakeups."
         )
+
+    def _on_tf_wakeup(self, _message):
+        """Wake the executor on TF arrival without processing transforms."""
+        pass
 
     def timer_callback(self):
         """Publish [Fx, Fy, Fz, Tx, Ty, Tz, source_host_unix_time]."""

@@ -5,5 +5,6 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
+STUDY_DATA_DIR = PROJECT_ROOT / "User_Study_Data"
 CALIBRATION_DIR = PROJECT_ROOT / "utils" / "config" / "calibration_files"
-BIAS_DIR = DATA_DIR / "sensor_bias"
+BIAS_DIR = PROJECT_ROOT / "utils" / "sensor_bias"

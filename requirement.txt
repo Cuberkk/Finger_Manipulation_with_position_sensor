@@ -22,7 +22,7 @@ jupyterlab
 ipykernel
 
 # Install separately through ROS / the operating system / the device vendor:
-# - ROS 2: rclpy, tf2_ros, std_msgs, geometry_msgs, visualization_msgs, std_srvs.
+# - ROS 2: rclpy, tf2_ros, tf2_msgs, std_msgs, geometry_msgs, visualization_msgs, std_srvs.
 # - Polhemus driver/workspace providing the experiment's TF frames.
 # - NI-DAQmx native driver (the nidaqmx Python package alone is not sufficient).
 #   https://nidaqmx-python.readthedocs.io/en/latest/

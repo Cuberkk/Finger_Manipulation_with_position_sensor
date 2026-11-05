@@ -2,7 +2,7 @@
 
 ## Repository Layout
 
-All acquisition and experiment functionality lives in `utils/`, grouped by purpose. Recorded and generated data lives in `data/`; analysis notebooks live in `data_process/`.
+All acquisition and experiment functionality lives in `utils/`, grouped by purpose. GUI recordings live in `User_Study_Data/`, and shared bias files live in `utils/sensor_bias/`. Existing datasets, standalone recordings and analysis outputs remain in `data/`; analysis notebooks live in `data_process/`.
 
 ```text
 utils/
@@ -15,19 +15,25 @@ utils/
 ├── object_meshes/            # Final colored 50mm.glb and 80mm.glb used by the GUI
 ├── launch/                   # Multi-recorder launcher
 ├── config/calibration_files/ # ATI .cal files
+├── sensor_bias/              # Shared sensor bias CSV and JSON files
 └── paths.py                  # Shared repository, data, and calibration paths
 data/
 ├── user_*/                   # Participant recordings
-├── sensor_bias/              # Sensor bias CSV and JSON files
 ├── synced_data/              # Synchronized analysis data
 ├── segmented_data/           # Segmented analysis data
 └── analysis_results/         # PCA figures and other analysis outputs
+User_Study_Data/              # GUI recordings only
+├── User001/                  # Participant/object-size/task/trial folders
+└── demo/                     # Simulated GUI recordings (Git-ignored)
 data_process/                # Single-trial and multi-trial analysis notebooks
 docs/images/                 # Protocol reference images
 docs/mesh_sources/           # Original GLB exports, original STLs, and legacy display assets
 ```
 
-Existing experiment folders under `data/` retain their layout.
+Existing experiment folders remain in `data/` with their original layout and
+contents. Only the GUI defaults to `User_Study_Data/`; its `--data-root` option
+can still select a different recording root. Standalone recorders and analysis
+notebooks continue using `data/`. Shared bias files use `utils/sensor_bias/`.
 
 ## Running the Experiment
 
@@ -52,6 +58,44 @@ First start NI-DAQ in the Windows repository root:
 ```powershell
 python -m utils.publishers.NIDAQ_ATI_publisher
 ```
+
+The NI-DAQ node also subscribes to `/tf` with an empty callback to test whether
+incoming TF messages improve executor wakeup timing on Windows. This subscription
+is always enabled, including in the diagnostic entry point below. It requires
+the ROS `tf2_msgs` package and a live Polhemus `/tf` stream reachable from Windows
+to provide those wakeups. It does not look up or apply transforms. Restart the
+NI-DAQ publisher after updating and compare the same acquisition topic's rate.
+
+If NI-DAQ topics appear slower than the configured 600 Hz, stop the normal
+NI-DAQ publisher and run this diagnostic entry point **on the Windows acquisition
+computer**, in the same environment:
+
+```powershell
+python -m utils.diagnostics.nidaq_rate --interval 5
+```
+
+It runs the original publisher and reports source-side counters every five
+seconds. `sample_clock_hz` is the device-reported clock setting;
+`drained_scans_hz` measures scans actually read from its buffer;
+`callbacks_hz` and `batches_hz` distinguish timer callbacks from nonempty reads.
+`publish_s1_hz` and `publish_s2_hz` count successful publish calls for each topic,
+not subscriber deliveries. `mean_batch` is scans per read, and
+`skipped_old_scans_hz` counts older buffered scans omitted by the reader's
+existing latest-scan policy. The diagnostic does not change that policy or the
+force values and source timestamps. It adds measurement overhead, so compare it
+with the normal entry point after diagnosis.
+
+| Example source-side result | What to investigate |
+| --- | --- |
+| About 75 callbacks/s, 600 drained scans/s, mean batch 8, short callbacks | Timer scheduling on the acquisition host |
+| About 600 callbacks/s, 75 batches/s, mean batch 8 | Device/driver buffer updates or transfer batching |
+| About 75 callbacks/s, long `publish_mean_ms` | DDS publication blocking, including possible network/subscriber effects |
+| About 600 successful publish calls/s, Linux receives about 75/s | Transport, subscriber QoS or measurement overhead |
+
+Windows and Linux both reporting 75 Hz with `ros2 topic hz` does not distinguish
+these cases: the command measures its own subscription's receiving rate. In the
+first two examples, the original reader publishes just the last scan from each
+batch, so 600 hardware scans/s need not produce 600 messages/s per topic.
 
 On Linux, start LabJack in a separate terminal and start the existing Polhemus TF
 stream as usual:
@@ -163,12 +207,17 @@ keep their names, units and schemas, so the GUI and recorders work as before.
 Open the GUI with `python -m utils.gui.study_gui` to request or monitor calibration.
 
 Central calibration files are saved only on Linux at
-`data/sensor_bias/bias_csv/Central_ATI_Bias.csv` and
-`data/sensor_bias/bias_json/Central_ATI_Bias.json`. The CSV is headerless with
+`utils/sensor_bias/bias_csv/Central_ATI_Bias.csv` and
+`utils/sensor_bias/bias_json/Central_ATI_Bias.json`. The CSV is headerless with
 columns `sensor_id, source_timestamp_sec, Fx, Fy, Fz, Tx, Ty, Tz`; JSON includes
 all three offsets, sample counts, common time window and units. Existing saved
 calibrations are not automatically loaded. To wait for a manual first request,
 start the processing node with `--ros-args -p bias_on_start:=false`.
+
+Existing NI-DAQ, LabJack and central bias CSV/JSON files are kept together under
+`utils/sensor_bias/`. Restart the central processing node after this path change
+so future calibrations use the new directory. Per-trial `force_bias.json`
+snapshots remain beside their GUI recordings under `User_Study_Data/`.
 
 Central parameters include `bias_time_sec` (5.0), `bias_warmup_sec` (0.5),
 `bias_timeout_sec` (15.0), `bias_min_samples` (30 per sensor),
@@ -226,7 +275,7 @@ python -m utils.gui.study_gui --demo
 python -m utils.gui.study_gui
 ```
 
-The GUI opens separate researcher and participant windows. Demo mode runs with Tkinter and NumPy on a graphical desktop, generates simulated force/torque and tracking data, and saves it under `data/demo/` by default. Live mode uses the central processor's output and the Polhemus TF stream. The GUI records its own data; the standalone recorders are not needed for this workflow.
+The GUI opens separate researcher and participant windows. Demo mode runs with Tkinter and NumPy on a graphical desktop, generates simulated force/torque and tracking data, and saves it under `User_Study_Data/demo/` by default. Live mode uses the central processor's output and the Polhemus TF stream. The GUI records its own data; the standalone recorders are not needed for this workflow.
 
 In **demo mode**, the advisor has a **DEMO · DATA SAVING** row directly below the User Number / Trial controls at the top. Its **Save data (CSV + metadata)** checkbox is checked by default. Uncheck it to test the complete workflow without creating session folders, CSV files, or metadata files, including during angle tests. The choice applies to the next trial or angle test and is locked during preparation, recording, and saving; it can be changed during rest. The interface explicitly labels trials with recording disabled as **DEMO PREVIEW**. Live mode always records data. Restart the GUI after updating the code, using `python -m utils.gui.study_gui --demo`, to load the current interface.
 
@@ -252,7 +301,7 @@ Rest durations come from [Rest_Time.py](docs/user_study_docs/Rest_Time.py), whos
 
 Edit the minute values and restart the GUI to change rest durations, or use `--rest-config PATH` with an alternative configuration containing `trials`, `tasks`, and `objects`. A zero value omits that rest; fractional seconds round up to whole seconds. Each session's metadata records the loaded rest configuration and durations.
 
-Counting requires a complete rotation cycle: **neutral → negative target → neutral → positive target → neutral**. These zones use the signed sum of consecutive rotations about the moving task axis. Neutral means that this cycle angle is within the neutral band. Measured rotation trials use the group's accepted angle-test target; the researcher can adjust the default neutral band of ±5° and 0.12-second hold requirement. The trial stops automatically at 20 cycles; stopping early also saves the recorded data. Tracking interruptions discard an unfinished cycle while retaining completed cycles; the first valid recovered pose establishes a new zero and starts a fresh neutral hold. The `G` / finger-gating task currently uses the researcher's manual `+1` count pending a defined automatic counting rule.
+Counting requires a complete rotation cycle: **neutral → negative target → neutral → positive target → neutral**. These zones use the signed sum of consecutive rotations about the moving task axis. Reaching a target or passing through the neutral band advances the sequence immediately; no position requires a hold. Neutral defaults to ±5°, and crossing it between two adjacent valid angle samples also counts even if neither sample lands inside the band. Transitions follow their order along that sampled movement, so a fast neutral crossing can reach the next target in the same update. Measured rotation trials use the group's accepted angle-test target; the researcher can adjust the neutral band. The advisor no longer has a Hold setting. The trial stops automatically at 20 cycles; stopping early also saves the recorded data. Tracking interruptions discard an unfinished cycle while retaining completed cycles; the first valid recovered pose establishes a new zero and starts a fresh sequence. Crossings are not inferred across tracking interruptions. The `G` / finger-gating task currently uses the researcher's manual `+1` count pending a defined automatic counting rule.
 
 For example, `80R0` means the 80 mm object, Roll, repetition 0; it is displayed as `Task 1/5`. Both windows start in normal windowed mode. F11 toggles fullscreen in the focused window; Escape exits fullscreen. Move the participant window to its own monitor if needed. Both windows scale their fonts independently with their window size. The digital twin uses the same additional **1.30× uniform display scale** for the 50 mm and 80 mm models, including their reference axes. This display enlargement preserves model proportions and the original rotation origin. Restoring the window size restores its font sizes.
 
@@ -273,8 +322,8 @@ GUI configuration options:
 
 | Argument | Meaning |
 | --- | --- |
-| `--demo` | Generate simulated samples; default save root is `data/demo/` |
-| `--data-root` | Override the save root; live mode defaults to repository `data/` |
+| `--demo` | Generate simulated samples; default save root is `User_Study_Data/demo/` |
+| `--data-root` | Override the save root; live mode defaults to repository `User_Study_Data/` |
 | `--protocol` | Override the trial lookup CSV |
 | `--rest-config` | Rest_Time.py-style configuration; values are minutes |
 | `--mesh-dir` | Directory containing prepared 50 mm and 80 mm GLB models; legacy STL is supported |
@@ -292,12 +341,17 @@ The displayed mesh uses `C = T.T @ R0.T @ Rt @ T`, where `R0` is the baseline se
 
 Both windows also show **Axis error** and **Accumulated angle** during a rotation trial. These use the moving object axes: `D = T.T @ R_previous.T @ R_current @ T` expresses each incremental rotation in the previous sample's object frame. Axis error is `degrees(acos(abs(dot(increment_axis, task_axis))))`, from 0° to 90°; forward and reverse movement along the same axis have equal error. Accumulated angle sums the signed task-axis twist of each valid increment. It follows the motion path and can accumulate measurement noise; returning this sum to zero does not necessarily restore the starting orientation. Sensor 4 measures the total object motion, including motion caused by wrist adjustments.
 
-Axis error is unavailable when the inter-sample rotation is below 0.05°, matching the existing RViz minimum-motion setting. This is a motion threshold, not a calibrated noise bound. Small valid angle increments still contribute to the cycle and accumulated angles. Duplicate timestamps are ignored. A gap above 0.5 seconds, backwards/invalid samples, tracking loss, or a pose-queue overflow breaks the adjacent-sample reference. The cycle angle is re-zeroed at the first valid recovered pose, while the trial's accumulated angle retains the sum of observed intervals and is marked **partial**. Trial metadata records the method, thresholds, accumulated angle, and continuity. Axis error is feedback; cycle progression uses the local task-angle sequence and its hold times. Finger gaiting has no defined target rotation axis and displays N/A.
+Axis error is unavailable when the inter-sample rotation is below 0.05°, matching the existing RViz minimum-motion setting. This is a motion threshold, not a calibrated noise bound. Small valid angle increments still contribute to the cycle and accumulated angles. Duplicate timestamps are ignored. A gap above 0.5 seconds, backwards/invalid samples, tracking loss, or a pose-queue overflow breaks the adjacent-sample reference. The cycle angle is re-zeroed at the first valid recovered pose, while the trial's accumulated angle retains the sum of observed intervals and is marked **partial**. Trial metadata records the method, thresholds, accumulated angle, and continuity. Axis error is feedback; cycle progression uses crossings of the local task-angle zones. Finger gaiting has no defined target rotation axis and displays N/A.
+
+Cycle counting does not apply an Axis-error acceptance threshold. A high Axis
+error is displayed and saved, while counting still uses task-axis angle,
+neutral/target crossings and tracking continuity. New trial metadata records
+`cycle_detection: "pass_through"` and the cycle sequence.
 
 GUI recordings use a participant/object-size/task/trial structure:
 
 ```text
-data/
+User_Study_Data/
 └── User001/
     ├── SessionMetadata/
     │   └── Session_20261104_170000_123456/
@@ -330,9 +384,15 @@ data/
 
 Numeric user identifiers are padded to at least three digits: both `1` and `001` use `User001`. Named identifiers retain their validated spelling. The same participant directory is reused after restarting the GUI. Task folders are `Roll`, `Pitch`, `Yaw`, and `FingerGaiting`, separately under each object size. Trial folders use **local repetition numbers `Trial1` through `Trial5` within each size/task**, independently of the GUI's protocol reference. Metadata retains the original reference/code and records `task_trial_number`. Practice data uses `Practice_<timestamp>`.
 
-Timestamps use `%Y%m%d_%H%M%S_%f` (local date, time and microseconds). When a new recording of the same local trial starts, all previous active folders for that trial move intact into that task's `Archive/`. Their CSVs, bias snapshots and metadata are preserved. Different trials, sizes and tasks are unaffected. Archive-name collisions receive a suffix such as `_02`; archive failures stop the new recording and attempt to restore already moved folders. Rerecording practice archives only the prior practice attempt. Existing recordings in the earlier directory layout retain their original locations; they are not automatically migrated.
+Timestamps use `%Y%m%d_%H%M%S_%f` (local date, time and microseconds). When a new recording of the same local trial starts, all previous active folders for that trial move intact into that task's `Archive/`. Their CSVs, bias snapshots and metadata are preserved. Different trials, sizes and tasks are unaffected. Archive-name collisions receive a suffix such as `_02`; archive failures stop the new recording and attempt to restore already moved folders. Rerecording practice archives only the prior practice attempt. Existing legacy datasets remain in `data/`; new GUI recordings use `User_Study_Data/`.
 
 Each GUI run/user selection writes a separate settings record under `SessionMetadata/Session_<timestamp>/session_metadata.json`, so reopening a participant does not replace prior settings. Every recorded trial includes `session_metadata_file`, relative to its participant directory (`session_metadata_base: "participant_directory"`), so the reference remains valid after archiving. Demo preview continues to create no participant folders or files.
+
+Practice recordings are saved locally as usual but ignored by Git, including
+`Practice_<timestamp>` attempts inside `Archive/` and legacy practice folder
+names. Existing tracked practice files are removed from the index only; their
+local recordings remain intact. Measured trials remain eligible for tracking.
+Demo recordings under `User_Study_Data/demo/` are also ignored.
 
 Angle-test folders are reserved independently under each size/task's `RotationCalibration/<timestamp>`; repeated attempts remain in their original unique locations. They contain the same sensor and progress CSV streams as trial recordings. Their `trial_metadata.json` has `recording_kind: "rotation_calibration"`, `target_cycles: null`, `target_deg: null`, and the observed range and continuity. Normal test results are `calibration_completed`, `calibration_failed`, and `calibration_cancelled`; shutdowns retain their interruption reason. A successful `rotation_calibration` record stores the positive and negative maxima, selected symmetric target, selection rule, user/diameter/task, object-frame method, timestamps, and recording path. Each measured trial copies that record into its own `rotation_calibration` field alongside its actual target angle. Calibration samples therefore remain separate from the 20-cycle trial data.
 
@@ -394,7 +454,7 @@ Start Jupyter from the repository root or `data_process/`, and open the appropri
 
 Run the path setup cell first, then set the participant, diameter, task, and trial variables in the notebook. Paths resolve to the repository's `data/` directory. Synchronized and segmented files remain under `data/`, and exported PCA figures are saved to `data/analysis_results/`.
 
-The notebooks currently build paths for the standalone recorders' `data/user_{number}/{diameter}mm/{task}/trial_{number}/` layout. To analyze a new GUI recording, update the notebook's input paths to the selected session/task/trial folder.
+The notebooks currently build paths for the standalone recorders' `data/user_{number}/{diameter}mm/{task}/trial_{number}/` layout. To analyze a new GUI recording, update the notebook's input paths to the selected participant/size/task/trial folder under `User_Study_Data/`.
 
 In the single-trial PCA routines, combined force and torque data is normalized with `StandardScaler` before PCA. Force-only analysis leaves scaling disabled to preserve the physical magnitude relationships.
 

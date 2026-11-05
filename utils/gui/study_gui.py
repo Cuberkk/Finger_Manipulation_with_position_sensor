@@ -20,7 +20,7 @@ import numpy as np
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from utils.paths import DATA_DIR, PROJECT_ROOT
+from utils.paths import PROJECT_ROOT, STUDY_DATA_DIR
 from utils.gui.mesh_view import MeshView, mesh_asset_path
 from utils.gui.responsive import ResponsiveFonts
 from utils.gui.rest import RestCountdown, load_study_settings
@@ -160,7 +160,6 @@ class StudyApplication:
         self.selection = tk.StringVar()
         self.target = tk.StringVar()
         self.neutral = tk.StringVar(value="5")
-        self.dwell = tk.StringVar(value="0.12")
         self.require_ft = tk.BooleanVar(value=True)
         self.record_demo_data = tk.BooleanVar(value=True)
         self.record_demo_box = None
@@ -289,7 +288,7 @@ class StudyApplication:
         settings = tk.Frame(control, bg="white")
         settings.pack(fill="x")
         self.setting_entries = []
-        for title, variable, width in (("Target ±°", self.target, 12), ("Neutral ±°", self.neutral, 5), ("Hold (s)", self.dwell, 5)):
+        for title, variable, width in (("Target ±°", self.target, 12), ("Neutral ±°", self.neutral, 5)):
             self.label(settings, title, size=9).pack(side="left", padx=(0, 6))
             entry = ttk.Entry(settings, textvariable=variable, width=width)
             entry.pack(side="left", padx=(0, 16))
@@ -718,7 +717,7 @@ class StudyApplication:
         calibration = self.current_calibration() if self.trial.axis and not self.trial.practice else None
         target = (calibration["target_deg"] if calibration else
                   float(self.target.get()) if self.trial.practice and self.trial.axis else 30.)
-        counter = RotationCounter(target, float(self.neutral.get()), float(self.dwell.get()))
+        counter = RotationCounter(target, float(self.neutral.get()))
         self.preflight(self.bridge.snapshot())
         return counter
 
@@ -806,6 +805,10 @@ class StudyApplication:
             self.axis_tracker = RotationAxisTracker(self.trial.axis) if self.trial.axis else None
             if self.axis_tracker is not None:
                 self.axis_tracker.update(np.eye(3), pose.source_timestamp)
+                if not self.calibrating:
+                    # The captured baseline is neutral. A first moving sample
+                    # can already lie beyond the band without losing that pass.
+                    self.counter.update(0.0, pose.source_timestamp)
             self.started = time.monotonic()
             self.started_utc = utc_now()
             self.tracking_interruptions = 0
@@ -826,7 +829,9 @@ class StudyApplication:
                         "target_cycles": None if self.calibrating else 20,
                         "target_deg": None if self.calibrating else self.counter.target_deg,
                         "neutral_deg": self.counter.neutral_deg,
-                        "dwell_sec": self.counter.dwell_sec,
+                        "cycle_detection": "pass_through",
+                        "cycle_sequence": ["neutral", "negative_target", "neutral", "positive_target", "neutral"],
+                        "neutral_crossing": "linear_between_adjacent_valid_samples",
                         "count_mode": ("rotation_range" if self.calibrating else
                                        "automatic_rotation" if self.trial.axis else "manual_gaiting"),
                         "mesh": str(mesh_asset_path(self.args.mesh_dir, self.trial.diameter_mm)),
@@ -1367,7 +1372,7 @@ class StudyApplication:
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--demo", action="store_true", help="Simulate sensors; default output is data/demo/.")
+    parser.add_argument("--demo", action="store_true", help="Simulate sensors; default output is User_Study_Data/demo/.")
     parser.add_argument("--data-root", type=Path, default=None)
     parser.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "docs/user_study_docs/Trials_lookup.csv")
     parser.add_argument("--rest-config", type=Path, default=PROJECT_ROOT / "docs/user_study_docs/Rest_Time.py",
@@ -1376,7 +1381,7 @@ def parse_args(argv=None):
                         help="Prepared 50mm/80mm GLB models; legacy STL is also supported.")
     parser.add_argument("--timezone", default="America/New_York", help="Timezone for session and trial folder names.")
     args = parser.parse_args(argv)
-    args.data_root = (args.data_root or (DATA_DIR / "demo" if args.demo else DATA_DIR)).expanduser().resolve()
+    args.data_root = (args.data_root or (STUDY_DATA_DIR / "demo" if args.demo else STUDY_DATA_DIR)).expanduser().resolve()
     args.protocol = args.protocol.expanduser().resolve()
     args.rest_config = args.rest_config.expanduser().resolve()
     args.mesh_dir = args.mesh_dir.expanduser().resolve()

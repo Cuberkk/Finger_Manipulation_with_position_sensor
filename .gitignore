@@ -211,4 +211,11 @@ __marimo__/
 imgui.ini
 *.pdf
 data/demo/
+User_Study_Data/demo/
+
+# Practice recordings, including attempts moved into Archive.
+/User_Study_Data/**/Practice_*/
+/User_Study_Data/**/User*_TrialP[0-9]*_*/
+/data/**/Practice_*/
+/data/**/User*_TrialP[0-9]*_*/
 tests/

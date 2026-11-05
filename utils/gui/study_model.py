@@ -351,38 +351,37 @@ class RotationCounter:
     """Count neutral -> negative -> neutral -> positive -> neutral sequences.
 
     Angles may be unwrapped sums of moving-object task-axis increments.
-    Every zone must be occupied for dwell_sec using fresh, increasing sample
-    timestamps (seconds). Repeated timestamps do not advance a dwell. Invalid
-    samples, backwards timestamps, or gaps greater than max_gap_sec discard
-    the partial sequence while preserving completed cycles.
+    Reaching or passing through a zone is enough; no hold is required.
+    Adjacent fresh samples also register zones crossed between them, in their
+    traversal order. Invalid samples, backwards timestamps, or gaps greater
+    than max_gap_sec discard the partial sequence and crossing reference while
+    preserving completed cycles. Repeated timestamps contribute nothing.
     """
 
     _INSTRUCTIONS = {
-        "seek_neutral": "Return to neutral and hold.",
-        "negative": "Rotate toward the negative target and hold.",
-        "neutral_after_negative": "Return to neutral and hold.",
-        "positive": "Rotate toward the positive target and hold.",
+        "seek_neutral": "Pass through neutral.",
+        "negative": "Reach the negative target.",
+        "neutral_after_negative": "Pass through neutral.",
+        "positive": "Reach the positive target.",
         "neutral_after_positive": "Return to neutral to finish the cycle.",
         "complete": "All cycles complete.",
     }
 
     def __init__(self, target_deg: float = 30, neutral_deg: float = 5,
-                 dwell_sec: float = .12, target_cycles: int = 20,
-                 max_gap_sec: float = .5):
+                 target_cycles: int = 20, max_gap_sec: float = .5):
         self.target_deg = float(target_deg)
         self.neutral_deg = float(neutral_deg)
-        self.dwell_sec = float(dwell_sec)
         self.max_gap_sec = float(max_gap_sec)
         self.target_cycles = operator.index(target_cycles)
         if (not all(math.isfinite(value) for value in
-                    (self.target_deg, self.neutral_deg, self.dwell_sec, self.max_gap_sec))
+                    (self.target_deg, self.neutral_deg, self.max_gap_sec))
                 or not 0 <= self.neutral_deg < self.target_deg
-                or self.dwell_sec < 0 or self.max_gap_sec <= 0
+                or self.max_gap_sec <= 0
                 or self.target_cycles <= 0):
             raise ValueError("Invalid rotation counter thresholds, timing, or cycle count.")
         self.count = 0
         self.phase = "seek_neutral"
-        self._dwell_start = None
+        self._last_angle = None
         self._last_timestamp = None
 
     @property
@@ -399,12 +398,29 @@ class RotationCounter:
 
     def _restart_partial(self):
         self.phase = "complete" if self.complete else "seek_neutral"
-        self._dwell_start = None
+        self._last_angle = None
 
     def reset_partial(self):
-        """Require a new neutral hold, retaining only already completed cycles."""
+        """Require a new neutral visit, retaining already completed cycles."""
         self._restart_partial()
         self._last_timestamp = None
+
+    def _visited_zones(self, start: float, end: float) -> list[str]:
+        """Return zones met along one continuous segment, in traversal order.
+
+        Include an endpoint in a zone, even for a stationary sample. Each zone
+        occurs at most once on a monotonic segment, so passing a target before
+        the required neutral visit cannot satisfy a later target transition.
+        """
+        low, high = min(start, end), max(start, end)
+        zones = []
+        if low <= -self.target_deg:
+            zones.append("negative")
+        if low <= self.neutral_deg and high >= -self.neutral_deg:
+            zones.append("neutral")
+        if high >= self.target_deg:
+            zones.append("positive")
+        return zones if end >= start else zones[::-1]
 
     def update(self, angle_deg: float, timestamp: float) -> bool:
         """Return True only on the fresh sample that completes a full cycle."""
@@ -427,29 +443,24 @@ class RotationCounter:
             if time - self._last_timestamp > self.max_gap_sec:
                 self._restart_partial()
         self._last_timestamp = time
-
-        if self.phase == "negative":
-            in_zone = angle <= -self.target_deg
-        elif self.phase == "positive":
-            in_zone = angle >= self.target_deg
-        else:
-            in_zone = abs(angle) <= self.neutral_deg
-        if not in_zone:
-            self._dwell_start = None
-            return False
-        if self._dwell_start is None:
-            self._dwell_start = time
-        if time - self._dwell_start + 1e-12 < self.dwell_sec:
-            return False
-        self._dwell_start = None
-        if self.phase == "neutral_after_positive":
-            self.count += 1
-            self.phase = "complete" if self.complete else "negative"
-            return True
-        self.phase = {
-            "seek_neutral": "negative",
-            "negative": "neutral_after_negative",
-            "neutral_after_negative": "positive",
-            "positive": "neutral_after_positive",
-        }[self.phase]
-        return False
+        start = angle if self._last_angle is None else self._last_angle
+        self._last_angle = angle
+        completed = False
+        for zone in self._visited_zones(start, angle):
+            expected = self.phase if self.phase in ("negative", "positive") else "neutral"
+            if zone != expected:
+                continue
+            if self.phase == "neutral_after_positive":
+                self.count += 1
+                completed = True
+                self.phase = "complete" if self.complete else "negative"
+                if self.complete:
+                    break
+            else:
+                self.phase = {
+                    "seek_neutral": "negative",
+                    "negative": "neutral_after_negative",
+                    "neutral_after_negative": "positive",
+                    "positive": "neutral_after_positive",
+                }[self.phase]
+        return completed

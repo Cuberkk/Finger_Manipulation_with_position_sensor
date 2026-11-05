@@ -1,0 +1,56 @@
+{
+    "NIDAQ_S1": [
+        -0.08913092262185109,
+        -3.3371098197221394,
+        2.322909772371602,
+        -37.8628344897108,
+        -7.469939963399331,
+        28.875414382945745
+    ],
+    "NIDAQ_S2": [
+        1.9503050815901999,
+        3.069569484724082,
+        4.1210741773671655,
+        48.944348997932146,
+        -5.810802847770735,
+        31.560948066477508
+    ],
+    "Labjack": [
+        -0.34651098734561214,
+        -0.5276366247473823,
+        0.5935737851492796,
+        -6.76835941481757,
+        -1.672797201928713,
+        38.94892382149052
+    ],
+    "_metadata": {
+        "data_kind": "calibrated_uncorrected_wrench",
+        "force_unit": "N",
+        "torque_unit": "N-mm",
+        "bias_time_sec": 5.0,
+        "warmup_sec": 0.5,
+        "window_start_unix_sec": 1793834779.39922,
+        "window_end_unix_sec": 1793834784.39922,
+        "elapsed_sec": 6.019347724999534,
+        "sample_counts": {
+            "1": 362,
+            "2": 362,
+            "3": 3000
+        },
+        "timestamp_semantics": "source_host_read_completion",
+        "csv_columns": [
+            "sensor_id",
+            "source_timestamp_sec",
+            "Fx",
+            "Fy",
+            "Fz",
+            "Tx",
+            "Ty",
+            "Tz"
+        ],
+        "input": "factory-calibrated uncorrected force/torque",
+        "force_units": "N",
+        "torque_units": "N-mm",
+        "timestamp_kind": "acquisition-host Unix read timestamp"
+    }
+}
