@@ -366,8 +366,7 @@ class StudyApplication:
         self.part_instruction.pack(pady=(4, 0))
         self.part_angle = self.label(self.participant_body, size=11, color=MUTED, bg=PARTICIPANT_BG)
         self.part_angle.pack(pady=(8, 0))
-        self.part_axis_motion = self.label(self.participant_body, variable=self.axis_motion_label,
-                                           size=11, color=TEAL, bg=PARTICIPANT_BG)
+        self.part_axis_motion = self.label(self.participant_body, size=11, color=TEAL, bg=PARTICIPANT_BG)
         self.part_axis_motion.pack(pady=(5, 0))
         self.mesh = MeshView(self.participant_body, self.args.mesh_dir, height=380)
         self.mesh.pack(fill="both", expand=True, padx=30)
@@ -565,6 +564,7 @@ class StudyApplication:
         self.part_task.configure(text=f"Trial Task: {self.trial.code}     ·     Task {task}")
         axis = f"{TASK_NAMES[self.trial.task]}  /  Object {self.trial.axis.upper()} axis" if self.trial.axis else "Finger gaiting  /  researcher counts"
         self.part_axis.configure(text=axis)
+        self.part_axis_motion.configure(text=self.axis_motion_text(participant=True))
         self.mesh.set_diameter(self.trial.diameter_mm)
         self.mesh.set_pose(np.eye(3), self.trial.axis, tracking=True)
         self.status_label.set("READY")
@@ -968,9 +968,10 @@ class StudyApplication:
                     self.finish_trial("completed")
                     break
 
-    def axis_motion_text(self, tracking=True):
+    def axis_motion_text(self, tracking=True, *, participant=False):
+        """Keep participant feedback concise while retaining advisor diagnostics."""
         if not self.trial.axis:
-            return "Axis error: N/A · Finger gaiting"
+            return "" if participant else "Axis error: N/A · Finger gaiting"
         if self.baseline is None or self.axis_tracker is None:
             return "Axis error: — · Start trial to measure"
         measurement = self.axis_tracker.sample
@@ -982,9 +983,11 @@ class StudyApplication:
             error = "— · Motion too small"
         else:
             error = "— · Waiting for motion"
+        text = f"Axis error: {error}"
+        if participant:
+            return text
         partial = " (partial)" if not measurement.continuous else ""
-        text = (f"Axis error: {error}   ·   Accumulated angle: "
-                f"{measurement.accumulated_angle_deg:+.1f}°{partial}")
+        text += f"   ·   Accumulated angle: {measurement.accumulated_angle_deg:+.1f}°{partial}"
         if self.calibrating:
             limits = self.range_calibration
             text += f"   ·   Max +{limits.positive_max_deg:.1f}° / −{limits.negative_max_deg:.1f}°"
@@ -1301,12 +1304,13 @@ class StudyApplication:
             target = calibration["target_deg"] if calibration else self.counter.target_deg
             target_text = (self.target.get() if self.trial.practice and self.state in ("ready", "finished")
                            else f"{target:g}")
-            angle_label = (f"{TASK_NAMES[self.trial.task]} cycle angle  {angle_text}   ·   "
+            angle_label = (f"Cycle angle  {angle_text}   ·   "
                            f"Target ±{target_text}°   ·   Neutral ±{self.counter.neutral_deg:g}°")
         else:
-            angle_label = "20 cycles · counted by the researcher"
+            angle_label = ""
         self.part_angle.configure(text=angle_label)
         self.axis_motion_label.set(self.axis_motion_text(tracking))
+        self.part_axis_motion.configure(text=self.axis_motion_text(tracking, participant=True))
         if not self.rest_screen_visible and self.state != "countdown":
             self.mesh.set_pose(self.rotation, self.trial.axis, tracking=tracking if self.baseline is not None else True)
         self.update_progress()
