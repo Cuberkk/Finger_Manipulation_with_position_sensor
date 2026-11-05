@@ -219,3 +219,7 @@ User_Study_Data/demo/
 /data/**/Practice_*/
 /data/**/User*_TrialP[0-9]*_*/
 tests/
+AGENTS.md
+docs/technical_docs
+User_Study_Data/User001/SessionMetadata
+utils/sensor_bias
