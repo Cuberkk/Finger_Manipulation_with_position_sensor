@@ -47,7 +47,6 @@ TEAL = "#147D79"
 LIGHT = "#F0F4F7"
 PARTICIPANT_BG = "#FFFFFF"
 TASK_NAMES = {"roll": "Roll", "pitch": "Pitch", "yaw": "Yaw", "finger_gating": "Finger gaiting"}
-COUNTDOWN_SEC = 5
 
 
 def report(message, error=False):
@@ -125,6 +124,9 @@ class StudyApplication:
         self.trials = load_trials(args.protocol)
         settings = load_study_settings(args.rest_config)
         self.rest_times = settings.rest_times
+        self.pickup_sec = settings.pickup_sec
+        self.hold_neutral_sec = settings.hold_neutral_sec
+        self.preparation_sec = self.pickup_sec + self.hold_neutral_sec
         self.force_limit_n = settings.force_limit_n
         self.torque_limit_nmm = settings.torque_limit_nmm
         self.release_force_threshold_n = settings.release_force_threshold_n
@@ -132,6 +134,7 @@ class StudyApplication:
             "gui_config_file": str(args.rest_config),
             "configured_tf_wait_tolerance_ms": settings.tf_wait_tolerance_ms,
             "release_force_threshold_n": settings.release_force_threshold_n,
+            "preparation_seconds": {"pickup": self.pickup_sec, "hold_neutral": self.hold_neutral_sec},
             "advisor_chart_limits": {
                 "force_limit_n": self.force_limit_n,
                 "torque_limit_nmm": self.torque_limit_nmm,
@@ -171,6 +174,9 @@ class StudyApplication:
         self.trial_path = None
         self.closing = False
         self.participant_start_error = False
+        self._participant_force_bias_error = False
+        self._trial_force_bias_request = None
+        self._trial_force_bias_approval = None
         self._space_held = False
         self._space_release = None
         self.previous_tracking = False
@@ -346,7 +352,7 @@ class StudyApplication:
         self.require_box.pack(side="left")
         buttons = tk.Frame(control, bg="white")
         buttons.pack(fill="x", pady=(8, 0))
-        self.start_button = ttk.Button(buttons, text=f"Start trial  ·  {COUNTDOWN_SEC}s", style="Accent.TButton", command=self.start_trial)
+        self.start_button = ttk.Button(buttons, text=f"Start trial  ·  {self.preparation_sec}s", style="Accent.TButton", command=self.start_trial)
         self.start_button.pack(side="left", padx=(0, 8))
         self.stop_button = ttk.Button(buttons, text="Stop & save", command=self.stop_current, state="disabled")
         self.stop_button.pack(side="left", padx=(0, 8))
@@ -490,7 +496,13 @@ class StudyApplication:
             return "break"
         if self.args.demo:
             if self.state == "countdown":
-                self.begin_recording()
+                now = time.monotonic()
+                if now < self.deadline - self.hold_neutral_sec:
+                    self.deadline = now + self.hold_neutral_sec
+                    self._update_preparation(now)
+                    self.part_instruction.configure(text=self.participant_instruction(now, tracking=True))
+                else:
+                    self.begin_recording()
                 return "break"
             if self.state == "recording" and not self.calibrating:
                 self.finish_trial("demo_skipped")
@@ -507,9 +519,11 @@ class StudyApplication:
         if self.state == "finished":
             if not self._completed_trial_saved() or self.index == len(self.trials) - 1:
                 return "break"
+            self._participant_force_bias_error = False
             try:
                 # Keep the completed trial selected if settings or sensors
                 # currently prevent starting the next one.
+                self._check_trial_force_bias(self.bridge.snapshot(), index=self.index + 1)
                 self._prepare_trial_start()
             except (ValueError, OverflowError) as exc:
                 self.notice.set(str(exc))
@@ -526,6 +540,8 @@ class StudyApplication:
             return "Please rest. Press SPACE to skip the remaining rest."
         if self.state == "countdown":
             suffix = " · SPACE to skip · DEMO" if self.args.demo else ""
+            if now < self.deadline - self.hold_neutral_sec:
+                return f"Pick up the object.{suffix}"
             purpose = " Angle test starts next." if self.calibrating else ""
             return f"Hold the object at neutral.{purpose}{suffix}"
         if self.state == "recording":
@@ -550,15 +566,24 @@ class StudyApplication:
                 return "Demo trial skipped · saving"
             return "Trial complete · saving" if self.count == 20 else "Trial stopped · saving"
         if self.participant_start_error:
+            target = self._force_bias_target_index()
+            if (self.state in ("ready", "finished") and self._requires_trial_force_bias(target)
+                    and not self._trial_force_bias_ready(target)):
+                return "Please wait for the researcher to complete Force bias before the next trial."
             return "Unable to start. Please ask the researcher."
         if self.state == "finished":
             if not self._completed_trial_saved():
                 return "Please wait for the researcher."
             if self.index == len(self.trials) - 1:
                 return "Study complete. Thank you!"
+            if (self._requires_trial_force_bias(self.index + 1)
+                    and not self._trial_force_bias_ready(self.index + 1)):
+                return "Trial complete. Please wait for the researcher to complete Force bias before the next trial."
             return "Trial complete. Press SPACE when you are ready for the next trial."
         if self.needs_calibration():
-            return "Angle test required before this task. Hold at neutral and press SPACE to begin."
+            return "Angle test required before this task. Press SPACE when you are ready to pick up the object."
+        if self._requires_trial_force_bias() and not self._trial_force_bias_ready():
+            return "Please wait for the researcher to complete Force bias before this trial."
         return "Press SPACE when you are ready to start."
 
     def calibration_key(self):
@@ -580,6 +605,8 @@ class StudyApplication:
             self.target.set(f"{calibration['target_deg']:.2f}" if calibration else "Test required")
 
     def refresh_identity(self):
+        self._retain_trial_force_bias(self.index)
+        self._force_bias_controls = None
         if hasattr(self, "info_vars"):
             self.info_vars["user"].set(self.user.get())
         if hasattr(self, "part_user"):
@@ -587,17 +614,19 @@ class StudyApplication:
         if hasattr(self, "target"):
             self.refresh_target()
         if hasattr(self, "start_button"):
-            self.start_button.configure(text=f"Start angle test  ·  {COUNTDOWN_SEC}s" if self.needs_calibration() else
-                                        f"Start trial  ·  {COUNTDOWN_SEC}s")
+            self.start_button.configure(text=f"Start angle test  ·  {self.preparation_sec}s" if self.needs_calibration() else
+                                        f"Start trial  ·  {self.preparation_sec}s")
 
     def _select_trial(self, index):
         if self.state in ("countdown", "recording", "saving", "resting") or not 0 <= index < len(self.trials):
             return
         self._clear_rest()
         self.index, self.state = index, "ready"
+        self._retain_trial_force_bias(index)
         self.calibrating = False
         self.range_calibration = None
         self.participant_start_error = False
+        self._participant_force_bias_error = False
         self.selection.set(f"{self.trial.reference}  ·  {self.trial.code}")
         self.counter = RotationCounter()
         self.axis_tracker = RotationAxisTracker(self.trial.axis) if self.trial.axis else None
@@ -621,7 +650,7 @@ class StudyApplication:
         self.mesh.set_diameter(self.trial.diameter_mm)
         self.mesh.set_pose(np.eye(3), self.trial.axis, tracking=True)
         self.status_label.set("READY")
-        self.notice.set(self.mesh.error or ("Ready. Hold the object at neutral before starting." if self.trial.axis else "Gaiting: the researcher records each completed cycle with +1."))
+        self.notice.set(self.mesh.error or ("Ready. Start to pick up the object, then hold at neutral when prompted." if self.trial.axis else "Gaiting: the researcher records each completed cycle with +1."))
         self.update_progress()
         self.set_controls()
         self.part_instruction.configure(text=self.participant_instruction(time.monotonic(), tracking=True))
@@ -630,12 +659,14 @@ class StudyApplication:
         busy = self.state in ("countdown", "recording", "saving", "resting")
         force_bias = self._force_bias_snapshot()
         bias_busy = self._force_bias_busy(force_bias=force_bias)
+        bias_required = (self._requires_trial_force_bias()
+                         and not self._trial_force_bias_ready(force_bias=force_bias))
         for widget in [self.user_entry, *self.setting_entries, self.require_box]:
             widget.configure(state="disabled" if busy else "normal")
         self.trial_select.configure(state="disabled" if busy else "readonly")
-        self.start_button.configure(state="disabled" if busy or self.closing or bias_busy else "normal",
-                                    text=f"Start angle test  ·  {COUNTDOWN_SEC}s" if self.needs_calibration() else
-                                    f"Start trial  ·  {COUNTDOWN_SEC}s")
+        self.start_button.configure(state="disabled" if busy or self.closing or bias_busy or bias_required else "normal",
+                                    text=f"Start angle test  ·  {self.preparation_sec}s" if self.needs_calibration() else
+                                    f"Start trial  ·  {self.preparation_sec}s")
         self.target_entry.configure(state="disabled" if busy else "normal" if self.trial.practice else "readonly")
         self.cancel_calibration_button.configure(state="normal" if self.calibrating and self.state == "recording" else "disabled")
         if getattr(self, "record_demo_box", None) is not None:
@@ -671,6 +702,74 @@ class StudyApplication:
             force_bias = self._force_bias_snapshot(snapshot)
         return bool(force_bias and (force_bias.get("pending") or force_bias.get("busy")))
 
+    def _requires_trial_force_bias(self, index=None):
+        """Require a new advisor bias for measured trials after angle testing."""
+        trial = self.trials[self.index if index is None else index]
+        key = (self.user.get().strip(), trial.diameter_mm, trial.task)
+        return (not self.args.demo and not trial.practice
+                and (not trial.axis or self.calibrations.get(key) is not None))
+
+    def _trial_force_bias_scope(self, index):
+        return self.user.get().strip(), index
+
+    def _force_bias_target_index(self):
+        """Bias during the completed trial's rest prepares the upcoming trial."""
+        if self.state == "resting":
+            return self.rest_next_index
+        if self._completed_trial_saved() and self.index + 1 < len(self.trials):
+            return self.index + 1
+        return self.index
+
+    def _retain_trial_force_bias(self, index):
+        """Discard approval when selecting a different participant or trial."""
+        scope = self._trial_force_bias_scope(index)
+        request = getattr(self, "_trial_force_bias_request", None)
+        approval = getattr(self, "_trial_force_bias_approval", None)
+        if request is not None and request["scope"] != scope:
+            self._trial_force_bias_request = None
+        if approval is not None and approval[0] != scope:
+            self._trial_force_bias_approval = None
+
+    def _trial_force_bias_ready(self, index=None, *, force_bias=None):
+        """Confirm one successful advisor request against the active transaction."""
+        if self.args.demo:
+            return True
+        status = self._force_bias_snapshot() if force_bias is None else force_bias
+        if status is None:
+            return False
+        identity = tuple(status.get(field) for field in ("processor_id", "generation", "request_id"))
+        confirmed = (status.get("available") and status.get("ready") and status.get("state") == "ready"
+                     and not status.get("pending") and not status.get("busy") and not status.get("last_error"))
+        approval = getattr(self, "_trial_force_bias_approval", None)
+        if approval is not None and (approval[1] != identity or status.get("last_error")):
+            self._trial_force_bias_approval = None
+        request = getattr(self, "_trial_force_bias_request", None)
+        if request is not None and not status.get("pending") and not status.get("busy"):
+            if (status.get("processor_id") != request["processor_id"]
+                    or status.get("state") == "failed" or status.get("last_error")):
+                self._trial_force_bias_request = None
+            elif (confirmed and type(status.get("generation")) is int
+                  and type(status.get("request_id")) is int
+                  and type(request["generation"]) is int and type(request["request_id"]) is int
+                  and status["generation"] > request["generation"]
+                  and status["request_id"] > request["request_id"]):
+                self._trial_force_bias_approval = (request["scope"], identity)
+                self._trial_force_bias_request = None
+                if (getattr(self, "_participant_force_bias_error", False)
+                        and request["scope"] == self._trial_force_bias_scope(self._force_bias_target_index())):
+                    self.participant_start_error = False
+                    self._participant_force_bias_error = False
+        scope = self._trial_force_bias_scope(self.index if index is None else index)
+        return bool(confirmed and getattr(self, "_trial_force_bias_approval", None) == (scope, identity))
+
+    def _check_trial_force_bias(self, snapshot, *, index=None):
+        if (self._requires_trial_force_bias(index)
+                and not self._trial_force_bias_ready(index, force_bias=self._force_bias_snapshot(snapshot))):
+            self._participant_force_bias_error = True
+            if self._force_bias_busy(snapshot):
+                raise ValueError("Force bias is in progress. Keep all 3 sensors unloaded and wait before starting.")
+            raise ValueError("Complete a new Force bias in the advisor before each measured trial.")
+
     def request_force_bias(self):
         """Queue one shared force bias request; completion arrives in later snapshots."""
         if self.args.demo or self.closing or self.state in ("countdown", "recording", "saving"):
@@ -681,6 +780,12 @@ class StudyApplication:
             self._update_force_bias(snapshot)
             return False
         accepted = self.bridge.request_force_bias()
+        if accepted:
+            self._trial_force_bias_approval = None
+            self._trial_force_bias_request = {
+                "scope": self._trial_force_bias_scope(self._force_bias_target_index()),
+                **{field: status.get(field) for field in ("processor_id", "generation", "request_id")},
+            }
         self._update_force_bias(self.bridge.snapshot())
         if accepted:
             self.notice.set("Force bias requested. Keep all 3 sensors unloaded and stationary until it completes.")
@@ -689,6 +794,7 @@ class StudyApplication:
     def _update_force_bias(self, snapshot):
         status = self._force_bias_snapshot(snapshot)
         busy = self._force_bias_busy(snapshot)
+        bias_ready = self._trial_force_bias_ready(force_bias=status)
         self._observe_force_bias_quality(snapshot)
         if self.args.demo:
             text = "Demo · simulated force data · force bias disabled"
@@ -719,11 +825,16 @@ class StudyApplication:
                 text = "Force bias unavailable · start the force processor."
             elif state == "ready" and status.get("ready"):
                 text = "Force bias complete · all 3 sensors ready."
+                target = self._force_bias_target_index()
+                if (self.state in ("ready", "finished", "resting")
+                        and self._requires_trial_force_bias(target)
+                        and not self._trial_force_bias_ready(target, force_bias=status)):
+                    text = "New Force bias required before this measured trial · unload sensors and click Force bias."
             else:
                 text = "Force bias needed · keep sensors unloaded and click Force bias."
         if getattr(self, "force_bias_label", None) is not None:
             self.force_bias_label.set(text)
-        controls = (bool(status and status.get("available")), busy, self.state, self.closing)
+        controls = (bool(status and status.get("available")), busy, bias_ready, self.state, self.closing)
         if controls != getattr(self, "_force_bias_controls", None):
             self._force_bias_controls = controls
             self.set_controls()
@@ -787,7 +898,9 @@ class StudyApplication:
     def start_trial(self):
         if self.closing or self.state in ("countdown", "recording", "saving", "resting"):
             return False
+        self._participant_force_bias_error = False
         try:
+            self._check_trial_force_bias(self.bridge.snapshot())
             counter = self._prepare_trial_start()
         except (ValueError, OverflowError) as exc:
             self.notice.set(str(exc))
@@ -802,9 +915,8 @@ class StudyApplication:
         self.participant_start_error = False
         self.manual_count = 0
         self.state = "countdown"
-        self.deadline = time.monotonic() + COUNTDOWN_SEC
-        self.status_label.set("ANGLE TEST · HOLD AT NEUTRAL" if self.calibrating else "HOLD AT NEUTRAL")
-        self.notice.set("Hold the object at neutral. The orientation baseline is captured when the countdown ends.")
+        self.deadline = time.monotonic() + self.preparation_sec
+        self._preparation_stage = None
         self.set_controls()
         self.update_progress()
         self.rest_view.place(relx=0, rely=0, relwidth=1, relheight=1)
@@ -816,18 +928,31 @@ class StudyApplication:
     def _update_preparation(self, now):
         if self.state != "countdown":
             return
+        pickup_deadline = self.deadline - self.hold_neutral_sec
+        pickup = now < pickup_deadline
+        stage = "pickup" if pickup else "neutral"
+        total = self.pickup_sec if pickup else self.hold_neutral_sec
+        deadline = pickup_deadline if pickup else self.deadline
+        if stage != getattr(self, "_preparation_stage", None):
+            self._preparation_stage = stage
+            title = "PICK UP THE OBJECT" if pickup else "HOLD AT NEUTRAL"
+            self.status_label.set(("ANGLE TEST · " if self.calibrating else "") + title)
+            self.notice.set(f"Pick up the object. Hold at neutral starts after this {self.pickup_sec}-second countdown." if pickup else
+                            "Hold the object at neutral. The orientation baseline is captured when the countdown ends.")
         self.rest_view.set_preparation(
-            remaining=max(1, min(COUNTDOWN_SEC, math.ceil(self.deadline - now))),
-            total=COUNTDOWN_SEC, instruction=self.participant_instruction(now, tracking=True),
+            remaining=max(1, min(total, math.ceil(deadline - now))),
+            total=total, instruction=self.participant_instruction(now, tracking=True),
         )
 
     def begin_recording(self):
         self.rest_view.place_forget()
+        self._participant_force_bias_error = False
         try:
             if self.needs_calibration() and not self.calibrating:
                 raise ValueError("Complete the rotation angle test before recording a measured trial.")
             # Recheck after the countdown; capture R0 from the most recent fresh TF.
             snapshot = self.bridge.snapshot()
+            self._check_trial_force_bias(snapshot)
             pose = self.preflight(snapshot)
             # Capture the current bias once without requesting another tare.
             # Saved trials archive it; angle tests keep it only in memory.
@@ -939,6 +1064,9 @@ class StudyApplication:
             self.bridge.begin(self.writer, self.trial.axis, self.counter.target_deg,
                               alignment=self.alignment, baseline=self.baseline,
                               expected_bias=None if self.args.demo else bias_record)
+            if not self.args.demo and not self.calibrating:
+                self._trial_force_bias_request = None
+                self._trial_force_bias_approval = None
             self.state = "recording"
             self.previous_tracking = True
             self.rotation = np.eye(3)
@@ -1280,10 +1408,13 @@ class StudyApplication:
             if accepted:
                 calibration = self.current_calibration()
                 self.status_label.set("ANGLE TEST COMPLETE")
+                next_step = ("Complete Force bias in the advisor before starting the measured trial."
+                             if self._requires_trial_force_bias() and not self._trial_force_bias_ready() else
+                             "Press SPACE or Start trial when ready.")
                 self.notice.set(f"Maximum +{calibration['positive_max_deg']:.2f}° / "
                                 f"−{calibration['negative_max_deg']:.2f}°. "
                                 f"This task's measured trials use ±{calibration['target_deg']:.2f}°. "
-                                "Press SPACE or Start trial when ready.")
+                                + next_step)
             else:
                 self.status_label.set("ANGLE TEST · REPEAT REQUIRED")
                 error = writer.error or writer.metadata.get("calibration_error") or "Angle test cancelled or incomplete."
@@ -1357,6 +1488,9 @@ class StudyApplication:
         instruction = None
         if self._force_bias_busy():
             instruction = "Force bias is in progress. Keep all force sensors unloaded and wait."
+        elif (status.complete and self._requires_trial_force_bias(self.rest_next_index)
+              and not self._trial_force_bias_ready(self.rest_next_index)):
+            instruction = "Please wait for the researcher to complete Force bias before the next trial."
         elif self.participant_start_error:
             instruction = "Unable to start. Please ask the researcher."
         elif self.user.get().strip() != self.rest_user:

@@ -17,13 +17,15 @@ _KINDS = ("trials", "tasks", "objects")
 _STUDY_SETTINGS = ("PRACTICE_TARGETS_DEG", "SENSOR4_FROM_OBJECT")
 _OPTIONAL_SETTINGS = ("TF_WAIT_TOLERANCE_MS", "FORCE_LIMIT_N", "TORQUE_LIMIT_NMM",
                       "NIDAQ_SAMPLE_RATE_HZ", "LABJACK_SAMPLE_RATE_HZ",
-                      "RELEASE_FORCE_THRESHOLD_N")
+                      "RELEASE_FORCE_THRESHOLD_N", "PICKUP_SEC", "HOLD_NEUTRAL_SEC")
 DEFAULT_TF_WAIT_TOLERANCE_MS = 500.0
 DEFAULT_FORCE_LIMIT_N = 10.0
 DEFAULT_TORQUE_LIMIT_NMM = 100.0
 DEFAULT_NIDAQ_SAMPLE_RATE_HZ = 350.0
 DEFAULT_LABJACK_SAMPLE_RATE_HZ = 350.0
 DEFAULT_RELEASE_FORCE_THRESHOLD_N = 0.5
+DEFAULT_PICKUP_SEC = 10
+DEFAULT_HOLD_NEUTRAL_SEC = 5
 
 
 def _whole_seconds(value, name):
@@ -81,6 +83,8 @@ class StudySettings:
     nidaq_sample_rate_hz: float = DEFAULT_NIDAQ_SAMPLE_RATE_HZ
     labjack_sample_rate_hz: float = DEFAULT_LABJACK_SAMPLE_RATE_HZ
     release_force_threshold_n: float = DEFAULT_RELEASE_FORCE_THRESHOLD_N
+    pickup_sec: int = DEFAULT_PICKUP_SEC
+    hold_neutral_sec: int = DEFAULT_HOLD_NEUTRAL_SEC
 
 
 def _read_literal_settings(path: str | Path) -> dict:
@@ -118,22 +122,21 @@ def _rest_times_from_values(values: dict) -> RestTimes:
         raise ValueError("Missing rest time settings: " + ", ".join(sorted(missing)) + ".")
     seconds_by_kind = {}
     for name in _KINDS:
-        minutes = values[name]
-        if isinstance(minutes, bool) or not isinstance(minutes, (int, float)):
-            raise ValueError(f"{name} must be a finite, nonnegative number of minutes.")
+        seconds = values[name]
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+            raise ValueError(f"{name} must be a finite, nonnegative number of seconds.")
         try:
-            seconds = minutes * 60
-            valid = math.isfinite(seconds) and minutes >= 0
+            valid = math.isfinite(seconds) and seconds >= 0
         except OverflowError:
             valid = False
         if not valid:
-            raise ValueError(f"{name} must be a finite, nonnegative number of minutes.")
+            raise ValueError(f"{name} must be a finite, nonnegative number of seconds.")
         seconds_by_kind[name] = math.ceil(seconds)
     return RestTimes(**{f"{kind}_sec": seconds_by_kind[kind] for kind in _KINDS})
 
 
 def load_rest_times(path: str | Path) -> RestTimes:
-    """Read literal minute settings without executing the configuration file.
+    """Read literal second settings without executing the configuration file.
 
     Rest-only files remain supported. Positive fractional seconds round up so
     the integer-second rest never shortens the requested duration.
@@ -240,6 +243,10 @@ def load_study_settings(path: str | Path) -> StudySettings:
         release_force_threshold_n=_positive_setting(
             values.get("RELEASE_FORCE_THRESHOLD_N", DEFAULT_RELEASE_FORCE_THRESHOLD_N),
             "RELEASE_FORCE_THRESHOLD_N"),
+        pickup_sec=math.ceil(_positive_setting(
+            values.get("PICKUP_SEC", DEFAULT_PICKUP_SEC), "PICKUP_SEC")),
+        hold_neutral_sec=math.ceil(_positive_setting(
+            values.get("HOLD_NEUTRAL_SEC", DEFAULT_HOLD_NEUTRAL_SEC), "HOLD_NEUTRAL_SEC")),
     )
 
 

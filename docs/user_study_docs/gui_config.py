@@ -1,14 +1,20 @@
 # Shared GUI, acquisition, and central ATI settings: literal assignments only.
 # This file is read without execution. Restart the affected process after edits.
-# Rest time between trials, tasks, and objects, in minutes.
-trials = 1.0
-tasks = 2.0
-objects = 5.0
+# Rest time between trials, tasks, and objects, in seconds.
+# Use finite nonnegative numbers; 0 skips rest and fractional seconds round up.
+trials = 60
+tasks = 120
+objects = 300
+
+# Preparation durations in seconds, before every trial and angle test.
+# Use finite positive numbers; fractional seconds round up. Restart the GUI.
+PICKUP_SEC = 10
+HOLD_NEUTRAL_SEC = 5
 
 # Hardware sampling and ROS publication targets, in Hz; finite positive numbers.
 # Each publisher reads its local copy at startup. Restart it after rate changes.
 NIDAQ_SAMPLE_RATE_HZ = 600.0
-LABJACK_SAMPLE_RATE_HZ = 350.0
+LABJACK_SAMPLE_RATE_HZ = 360.0
 
 # Maximum ATI sample age while waiting for matching Polhemus TF, in milliseconds.
 # Shorter TF waits are retried silently; expired samples are dropped with a warning.

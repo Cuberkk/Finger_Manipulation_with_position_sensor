@@ -889,7 +889,7 @@ class ROSBridge:
                 current = force_bias_record(bias_status)
                 if (not isinstance(expected_bias, dict)
                         or any(current[field] != expected_bias.get(field)
-                               for field in ("processor_id", "generation", "biases"))):
+                               for field in ("processor_id", "generation", "request_id", "biases"))):
                     raise ValueError("Force bias changed before recording started; retry to capture the current offsets.")
             self.poses.clear()
             self.writer = writer
