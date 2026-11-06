@@ -25,8 +25,9 @@ from utils.paths import GUI_CONFIG_FILE, PROJECT_ROOT, STUDY_DATA_DIR
 from utils.gui.mesh_view import MeshView, mesh_asset_path
 from utils.gui.advisor_layout import AdvisorBody
 from utils.gui.force_visualization import ForceWaveformView
+from utils.gui.force_release import total_force_magnitude
 from utils.gui.responsive import ResponsiveFonts
-from utils.gui.rest import RestCountdown, load_study_settings
+from utils.gui.rest import DEFAULT_RELEASE_FORCE_THRESHOLD_N, RestCountdown, load_study_settings
 from utils.gui.rest_view import RestCountdownView
 from utils.gui.shutdown import ShutdownSignals
 from utils.gui.study_model import (
@@ -126,9 +127,11 @@ class StudyApplication:
         self.rest_times = settings.rest_times
         self.force_limit_n = settings.force_limit_n
         self.torque_limit_nmm = settings.torque_limit_nmm
+        self.release_force_threshold_n = settings.release_force_threshold_n
         self.gui_config_metadata = {
             "gui_config_file": str(args.rest_config),
             "configured_tf_wait_tolerance_ms": settings.tf_wait_tolerance_ms,
+            "release_force_threshold_n": settings.release_force_threshold_n,
             "advisor_chart_limits": {
                 "force_limit_n": self.force_limit_n,
                 "torque_limit_nmm": self.torque_limit_nmm,
@@ -159,6 +162,7 @@ class StudyApplication:
         self.range_calibration = None
         self.manual_count = 0
         self.angle = 0.0
+        self._reset_force_release()
         self.rotation = np.eye(3)
         self.started = None
         self.session_path = self.session_user = None
@@ -206,7 +210,8 @@ class StudyApplication:
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.after(50, self.tick)
         # Start the worker last: widget construction failures cannot orphan it.
-        self.bridge = ROSBridge(args.demo, self.events)
+        self.bridge = ROSBridge(args.demo, self.events,
+                                release_force_threshold_n=self.release_force_threshold_n)
 
     @property
     def trial(self):
@@ -315,7 +320,7 @@ class StudyApplication:
         charts.rowconfigure(0, weight=1)
         self.waveform_view = self._create_force_waveform_view(self.signal_panes)
         self.signal_panes.add(self.waveform_view, weight=1)
-        self.label(body, "Finger-force bars show magnitude; red = positive, blue = negative. Raw waveforms retain force and torque.",
+        self.label(body, "Finger-force bars show magnitude; red = positive, blue = negative. Waveforms share one force axis with scaled torque.",
                    size=9, color=MUTED, bg=LIGHT).grid(row=4, column=0, sticky="w", pady=(4, 8))
         control = tk.Frame(body, bg="white", padx=18, pady=10)
         control.grid(row=5, column=0, sticky="ew")
@@ -529,6 +534,8 @@ class StudyApplication:
                     return "Tracking interrupted. Ask the researcher to repeat the angle test."
                 return ("Rotate as far as you can in each direction around the highlighted axis, "
                         "returning to neutral between directions. The researcher will finish the test.")
+            if self.trial.axis and getattr(self, "_force_released", False):
+                return "Object released. Pick it up and continue using the original neutral."
             if self.args.demo:
                 return "DEMO · Press SPACE to skip this trial's cycle counting."
             return ("Tracking lost · pause movement" if not tracking else
@@ -595,6 +602,7 @@ class StudyApplication:
         self.counter = RotationCounter()
         self.axis_tracker = RotationAxisTracker(self.trial.axis) if self.trial.axis else None
         self.manual_count, self.baseline, self.angle = 0, None, 0.0
+        self._reset_force_release()
         self.axis_motion_label.set(self.axis_motion_text())
         self.rotation = np.eye(3)
         self.notes.set("")
@@ -859,6 +867,7 @@ class StudyApplication:
                     # can already lie beyond the band without losing that pass.
                     self.counter.update(0.0, pose.source_timestamp)
             self.started = time.monotonic()
+            self._reset_force_release()
             self.started_utc = utc_now()
             self.tracking_interruptions = 0
             self.ft_interruptions = {finger: 0 for finger in FINGERS}
@@ -902,6 +911,13 @@ class StudyApplication:
                         "incremental_angle_definition": "sum of signed task-axis twist from consecutive valid poses",
                         "cycle_angle_definition": "sum of signed task-axis increments since the latest tracking reference",
                         "cycle_angle_reset_policy": "re-zero on first valid pose after a tracking interruption",
+                        "rotation_release_detection": {
+                            "threshold_n": getattr(self, "release_force_threshold_n", DEFAULT_RELEASE_FORCE_THRESHOLD_N),
+                            "force_metric": "sum of three bias-corrected finger-force magnitudes",
+                            "max_force_age_sec": STALE_SEC,
+                            "neutral_policy": "preserve original trial neutral; cancel unfinished cycle only",
+                            "applies_to": "practice and measured rotation trials",
+                        },
                         "force_unit": "N", "raw_torque_unit": "N*mm", "force_axes": "finger frame",
                         "transformed_components": ["Fx", "Fy", "Fz"],
                         "topics": FORCE_TOPICS, "sensor_mapping": SENSORS, "require_all_force": self.require_ft.get(),
@@ -955,6 +971,65 @@ class StudyApplication:
             self.status_label.set("START FAILED")
             self.set_controls()
 
+    def _reset_force_release(self):
+        """Clear per-trial grip state without changing any rotation references."""
+        self._force_released = False
+        self._force_reacquired_at = None
+        self._force_release_events = []
+        self._force_release_event_drops = 0
+
+    def _apply_force_release_event(self, event):
+        """Apply one grip transition in the same receipt order as orientations."""
+        released = event["released"]
+        if released == getattr(self, "_force_released", False):
+            return
+        phase = self.counter.phase
+        self.counter.reset_partial()
+        self._force_released = released
+        if released:
+            if not hasattr(self, "_force_release_events"):
+                self._force_release_events = []
+            self._force_release_events.append({
+                "elapsed_sec": max(0.0, event["arrival"] - self.started),
+                "source_timestamp_sec": event["source_timestamp_sec"],
+                "force_sum_magnitude_n": event["force_sum_magnitude_n"],
+                "previous_cycle_phase": phase,
+                "completed_cycles": self.count,
+            })
+            self.notice.set("Object released. The unfinished cycle was cancelled; the original neutral is retained.")
+        else:
+            self._force_reacquired_at = event["arrival"]
+            self.notice.set("Object picked up. Continue using the original neutral and complete a full cycle.")
+
+    def _rotation_release_events(self, snapshot, now, force_events=None):
+        """Collect callback transitions without copying the waveform histories."""
+        active = self.state == "recording" and self.trial.axis and not self.calibrating
+        if snapshot.get("force_release_events_supported") is True:
+            batch = (force_events if force_events is not None
+                     else self.bridge.drain_force_release_events())
+            if not active:
+                return []
+            drops = batch["drops"]
+            if drops > getattr(self, "_force_release_event_drops", 0):
+                # Unknown grip intervals cannot contribute to a cycle. Tracking
+                # continues, and a retained held event can resume the counter.
+                self.counter.reset_partial()
+                self._force_released = True
+            self._force_release_event_drops = drops
+            return sorted(batch["events"], key=lambda event: event["arrival"])
+        if not active:
+            return []
+        force_sum = total_force_magnitude(snapshot.get("fingers", {}), now, max_age_sec=STALE_SEC)
+        if force_sum is None:
+            return []
+        threshold = getattr(self, "release_force_threshold_n", DEFAULT_RELEASE_FORCE_THRESHOLD_N)
+        return [{
+            "arrival": max(snapshot["fingers"][finger]["arrival"] for finger in FINGERS),
+            "released": force_sum <= threshold,
+            "force_sum_magnitude_n": force_sum,
+            "source_timestamp_sec": max(snapshot["fingers"][finger]["value"][-1] for finger in FINGERS),
+        }]
+
     def _break_rotation_tracking(self):
         self.counter.reset_partial()
         if self.axis_tracker is not None:
@@ -963,16 +1038,22 @@ class StudyApplication:
             self.range_calibration.invalidate()
         self.angle = None
 
-    def process_poses(self, poses, now, allow_finish=True):
+    def process_poses(self, poses, now, allow_finish=True, *, force_events=None):
         if self.baseline is None:
             return
-        pose_drops = self.bridge.snapshot()["pose_drops"]
+        snapshot = self.bridge.snapshot()
+        events = self._rotation_release_events(snapshot, max(now, time.monotonic()), force_events)
+        event_index = 0
+        pose_drops = snapshot["pose_drops"]
         if self.state == "recording" and pose_drops != self.last_pose_drops:
             self._break_rotation_tracking()
             self.last_pose_drops = pose_drops
         for pose in poses:
             if pose.arrival < (self.started or 0):
                 continue
+            while event_index < len(events) and events[event_index]["arrival"] <= pose.arrival:
+                self._apply_force_release_event(events[event_index])
+                event_index += 1
             try:
                 # The mesh uses this baseline-relative pose. The tracker takes
                 # consecutive poses to measure rotation about moving object axes.
@@ -1010,15 +1091,24 @@ class StudyApplication:
                         self.counter.reset_partial()
                     else:
                         self.angle = (0.0 if self.angle is None else self.angle) + measurement.step_angle_deg
-                    if self.angle is not None:
+                    reacquired_at = getattr(self, "_force_reacquired_at", None)
+                    released = (getattr(self, "_force_released", False)
+                                or (reacquired_at is not None and pose.arrival < reacquired_at))
+                    if self.angle is not None and not released:
                         self.counter.update(self.angle, pose.source_timestamp)
                 else:
                     self.angle = 0.0
+                    released = False
                 self.writer.add("progress", None, (pose.source_timestamp, pose.arrival - self.started, self.angle, self.count,
-                                                   self.counter.phase if self.trial.axis else "manual_gaiting"))
+                                                   "object_released" if released else self.counter.phase if
+                                                   self.trial.axis else "manual_gaiting"))
                 if self.count >= 20 and allow_finish:
+                    for event in events[event_index:]:
+                        self._apply_force_release_event(event)
                     self.finish_trial("completed")
-                    break
+                    return
+        for event in events[event_index:]:
+            self._apply_force_release_event(event)
 
     def axis_motion_text(self, tracking=True, *, participant=False):
         """Keep participant feedback concise while retaining advisor diagnostics."""
@@ -1113,6 +1203,8 @@ class StudyApplication:
             self.quality_issues.append("orientation tracking interrupted")
         if end_counters["pose_drops"] > self.start_counters["pose_drops"]:
             self.quality_issues.append("orientation queue overflow")
+        if getattr(self, "_force_release_event_drops", 0):
+            self.quality_issues.append("force-release event queue overflow")
         calibration_extra = {}
         if self.calibrating:
             calibration_extra["rotation_range_observation"] = {
@@ -1152,6 +1244,9 @@ class StudyApplication:
                                                time.monotonic() - self.started, self.angle,
                                                self.count, "demo_skipped"))
         self.writer.finish(result, {"completed_cycles": self.count, "duration_sec": time.monotonic() - self.started,
+                                   "object_release_count": len(getattr(self, "_force_release_events", [])),
+                                   "object_release_events": deepcopy(getattr(self, "_force_release_events", [])),
+                                   "force_release_event_drops": getattr(self, "_force_release_event_drops", 0),
                                    "demo_cycle_count_skipped": demo_skipped,
                                    "accumulated_angle_deg": (self.axis_tracker.sample.accumulated_angle_deg
                                                              if self.axis_tracker else None),
@@ -1325,7 +1420,11 @@ class StudyApplication:
         pose = snapshot["pose"]
         tracking = pose is not None and now - pose.arrival <= STALE_SEC
         self.pose_label.set("Sensor 4 · tracking" if tracking else "Sensor 4 · OFFLINE")
-        self.process_poses(self.bridge.drain_poses(), now)
+        if snapshot.get("force_release_events_supported") is True:
+            updates = self.bridge.drain_recording_updates()
+            self.process_poses(updates["poses"], now, force_events=updates)
+        else:
+            self.process_poses(self.bridge.drain_poses(), now)
         if self.state == "recording":
             self.observe_ft_quality(snapshot, now)
             if not tracking and self.previous_tracking:

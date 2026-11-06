@@ -350,6 +350,8 @@ class ForceWaveformView(tk.Frame):
         for signal in self.selected_signals:
             self.legend.create_line(x, y, x + 22, y, fill=signal.color, width=2, dash=signal.dash)
             label = signal.label
+            if signal.component >= 3:
+                label += f" (scaled ×{self.force_limit_n / self.torque_limit_nmm:g})"
             if signal.kind == "raw" and self._raw_bias_enabled:
                 label += " (bias corrected)" if self._raw_bias_offsets is not None else " (waiting for bias)"
             item = self.legend.create_text(x + 28, y, text=label, anchor="w",
@@ -367,11 +369,7 @@ class ForceWaveformView(tk.Frame):
         width, height = c.winfo_width(), c.winfo_height()
         if width < 180 or height < 110:
             return
-        if width >= 760:
-            panels = ((0, 0, width / 2 - 4, height), (width / 2 + 4, 0, width, height))
-        else:
-            panels = ((0, 0, width, height / 2 - 3), (0, height / 2 + 3, width, height))
-        plot_width = max(1, int(panels[0][2] - panels[0][0] - 74 * self.font_scale))
+        plot_width = max(1, int(width - 74 * self.font_scale))
         selected = self.selected_signals
         traces = {}
         for finger in FINGERS:
@@ -388,21 +386,19 @@ class ForceWaveformView(tk.Frame):
                         if kind == "raw" and self._raw_bias_enabled:
                             segments = subtract_raw_bias(segments, self._raw_bias_offsets[finger][signal.component])
                         traces[signal] = segments
-        for group, panel in enumerate(panels):
-            self._draw_panel(panel, group, {signal: segments for signal, segments in traces.items()
-                                           if signal.component // 3 == group})
+        self._draw_panel((0, 0, width, height), traces)
 
-    def _draw_panel(self, panel, group, traces):
+    def _draw_panel(self, panel, traces):
         c, scale = self.canvas, self.font_scale
         x0, y0, x1, y1 = panel
         left, right = x0 + 53 * scale, x1 - 13 * scale
         top, bottom = y0 + 25 * scale, y1 - 34 * scale
-        title = "Force (N)" if group == 0 else "Torque (N·mm)"
+        title = "Force (N) · torque scaled to force range"
         c.create_text(x0 + 10 * scale, y0 + 11 * scale, text=title, anchor="w", fill=INK,
                       font=self._font(9, True), tags="waveform-title")
         if right - left < 20 or bottom - top < 15:
             return
-        limit = self.force_limit_n if group == 0 else self.torque_limit_nmm
+        limit = self.force_limit_n
         low, high = -limit, limit
         c.create_rectangle(left, top, right, bottom, fill="#F8FAFC", outline="#DAE2EB",
                            tags="waveform-plot")
@@ -473,6 +469,10 @@ class ForceWaveformView(tk.Frame):
         for signal, segments in traces.items():
             for segment in segments:
                 any_samples = any_samples or bool(segment)
+                if signal.component >= 3:
+                    # Bias has already been subtracted in the original N·mm units.
+                    segment = tuple((relative, value / self.torque_limit_nmm * self.force_limit_n)
+                                    for relative, value in segment)
                 for visible in visible_segments(segment):
                     coordinates = []
                     for relative, value in visible:
@@ -543,7 +543,8 @@ class ForceWaveformView(tk.Frame):
         ttk.Label(buttons, textvariable=self._selection_status_var).pack(side="left", padx=(0, 12))
         ttk.Button(buttons, text="Clear all", command=lambda: self.set_selected_signals(())).pack(side="left")
         ttk.Button(buttons, text="Close", command=self._close_options).pack(side="right")
-        ttk.Label(body, text="Raw traces are dashed; finger-transformed traces are solid. Scroll the legend to see all labels.").grid(
+        ttk.Label(body, text="Raw traces are dashed; finger-transformed traces are solid.\n"
+                  "Torque shares the force plot, scaled by the configured force/torque limits. Scroll the legend to see all labels.").grid(
             row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
         self._sync_signal_options()
 

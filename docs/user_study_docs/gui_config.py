@@ -14,8 +14,13 @@ LABJACK_SAMPLE_RATE_HZ = 350.0
 # Shorter TF waits are retried silently; expired samples are dropped with a warning.
 TF_WAIT_TOLERANCE_MS = 500.0
 
+# Cancel an unfinished rotation cycle when the sum of all three bias-corrected
+# finger-force magnitudes is at or below this value in N. Keep the original neutral.
+RELEASE_FORCE_THRESHOLD_N = 0.5
+
 # Positive magnitude limits shared by all advisor bars and waveforms.
-# Bars show 0-limit; waveforms use signed axes from -limit to +limit.
+# Bars show 0-FORCE_LIMIT_N; waveforms share the signed +/-FORCE_LIMIT_N axis.
+# Torque is displayed as torque * FORCE_LIMIT_N / TORQUE_LIMIT_NMM on that axis.
 # Bar red indicates positive and blue indicates negative values.
 # Force is N; torque is N*mm. Each limit must be a finite positive number.
 FORCE_LIMIT_N = 10.0

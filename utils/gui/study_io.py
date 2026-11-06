@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import math
+from numbers import Real
 from pathlib import Path
 import queue
 import re
@@ -17,6 +18,7 @@ from collections import deque
 import numpy as np
 
 from utils.gui.force_history import ForceHistory, ForceHistorySample
+from utils.gui.force_release import total_force_magnitude
 from utils.gui.study_model import normalize_quaternion
 
 FINGERS = ("thumb", "index", "middle")
@@ -454,7 +456,15 @@ class PreviewWriter:
 
 class ROSBridge:
     """Own ROS callbacks on a worker; Tk reads snapshots and bounded histories."""
-    def __init__(self, demo, events, pose_rate=60.0):
+    def __init__(self, demo, events, pose_rate=60.0, *, release_force_threshold_n=0.5):
+        if isinstance(release_force_threshold_n, bool) or not isinstance(release_force_threshold_n, Real):
+            raise ValueError("Release force threshold must be a finite positive number in N.")
+        try:
+            release_force_threshold_n = float(release_force_threshold_n)
+        except (ValueError, OverflowError) as exc:
+            raise ValueError("Release force threshold must be a finite positive number in N.") from exc
+        if not math.isfinite(release_force_threshold_n) or release_force_threshold_n <= 0:
+            raise ValueError("Release force threshold must be a finite positive number in N.")
         self.demo = demo
         self.events = events
         self.pose_rate = pose_rate
@@ -472,6 +482,11 @@ class ROSBridge:
         self.poses = deque(maxlen=3000)
         self.pose_drops = 0
         self.writer = None
+        self.release_force_threshold_n = release_force_threshold_n
+        self._force_release_events = deque(maxlen=4096)
+        self._force_release_drops = 0
+        self._force_release_state = None
+        self._force_release_last_arrival = None
         self.error = None
         self.demo_axis = "x"
         self.demo_target = 30.0
@@ -521,6 +536,51 @@ class ROSBridge:
             )
             if self.writer:
                 self.writer.add(kind, finger, (values[-1], *values[:-1]))
+                if kind == "force":
+                    self._observe_force_release_locked(arrival)
+
+    def _observe_force_release_locked(self, arrival):
+        """Latch force transitions at receipt time, independent of GUI redraws."""
+        if self.writer is None:
+            return
+        fingers = {finger: {"value": self.values["force", finger],
+                            "arrival": self.times["force", finger]} for finger in FINGERS}
+        force_sum = total_force_magnitude(fingers, arrival, max_age_sec=STALE_SEC)
+        if force_sum is None:
+            return
+        released = force_sum <= self.release_force_threshold_n
+        if released == self._force_release_state:
+            return
+        self._force_release_state = released
+        # A callback can capture its receipt time before waiting for begin()'s
+        # lock. Keep transitions ordered without changing sample/CSV timestamps.
+        event_arrival = (arrival if self._force_release_last_arrival is None else
+                         max(arrival, self._force_release_last_arrival))
+        self._force_release_last_arrival = event_arrival
+        if len(self._force_release_events) == self._force_release_events.maxlen:
+            self._force_release_drops += 1
+        self._force_release_events.append({
+            "arrival": event_arrival,
+            "released": released,
+            "force_sum_magnitude_n": force_sum,
+            "source_timestamp_sec": max(item["value"][-1] for item in fingers.values()),
+        })
+
+    def drain_force_release_events(self):
+        """Detach recorded force transitions and cumulative queue losses."""
+        with self.lock:
+            events = list(self._force_release_events)
+            self._force_release_events.clear()
+            return {"events": events, "drops": self._force_release_drops}
+
+    def drain_recording_updates(self):
+        """Detach poses and grip transitions at one callback-lock boundary."""
+        with self.lock:
+            updates = {"poses": list(self.poses), "events": list(self._force_release_events),
+                       "drops": self._force_release_drops}
+            self.poses.clear()
+            self._force_release_events.clear()
+            return updates
 
     def sample_pose(self, quaternion, source_timestamp, arrival=None):
         arrival = time.monotonic() if arrival is None else arrival
@@ -548,6 +608,7 @@ class ROSBridge:
                 rate = (len(arrivals) - 1) / (arrivals[-1] - arrivals[0]) if len(arrivals) > 1 and arrivals[-1] > arrivals[0] else 0.0
                 fingers[finger] = {"value": self.values[key], "arrival": self.times[key], "rate": rate}
             return {"fingers": fingers, "pose": self.pose, "pose_drops": self.pose_drops,
+                    "force_release_events_supported": True,
                     "error": self.error, "force_bias": self._force_bias_snapshot_locked(time.monotonic())}
 
     def force_history_snapshot(self, now=None):
@@ -832,6 +893,11 @@ class ROSBridge:
                     raise ValueError("Force bias changed before recording started; retry to capture the current offsets.")
             self.poses.clear()
             self.writer = writer
+            self._force_release_events.clear()
+            self._force_release_drops = 0
+            self._force_release_state = None
+            self._force_release_last_arrival = None
+            self._observe_force_release_locked(time.monotonic())
             self.demo_axis = axis
             self.demo_target = target
             self.demo_alignment = alignment
@@ -850,7 +916,9 @@ class ROSBridge:
 
         A separate end()/drain_poses() pair can include a pose arriving after the
         recording boundary. The owner consumes these final recorded poses before
-        closing the progress CSV and computing the trial summary.
+        closing the progress CSV and computing the trial summary. Pending force
+        transitions remain frozen for drain_force_release_events(); callbacks
+        after writer detachment cannot add events beyond this same boundary.
         """
         with self.lock:
             writer = self.writer

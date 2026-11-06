@@ -332,9 +332,33 @@ Edit the minute values and restart the GUI to change rest durations, or use `--g
 
 Counting requires a complete rotation cycle: **neutral → negative target → neutral → positive target → neutral**. These zones use the signed sum of consecutive rotations about the moving task axis. Reaching a target or passing through the neutral band advances the sequence immediately; no position requires a hold. Neutral defaults to ±5°, and crossing it between two adjacent valid angle samples also counts even if neither sample lands inside the band. Transitions follow their order along that sampled movement, so a fast neutral crossing can reach the next target in the same update. Measured rotation trials use the group's accepted angle-test target; the researcher can adjust the neutral band. The advisor no longer has a Hold setting. The trial stops automatically at 20 cycles; stopping early also saves the recorded data. Tracking interruptions discard an unfinished cycle while retaining completed cycles; the first valid recovered pose establishes a new zero and starts a fresh sequence. Crossings are not inferred across tracking interruptions. The `G` / finger-gating task currently uses the researcher's manual `+1` count pending a defined automatic counting rule.
 
+During practice and measured rotation trials, putting the object down cancels
+only the **unfinished cycle**. Release is detected when
+`norm(F_thumb) + norm(F_index) + norm(F_middle) <= RELEASE_FORCE_THRESHOLD_N`,
+using all three fresh, bias-corrected finger-force vectors. The default threshold
+is **0.5 N in total**; edit `RELEASE_FORCE_THRESHOLD_N` in `gui_config.py` and
+restart the GUI to adjust it. Opposing force vectors cannot cancel in this sum.
+Missing or stale force data is not treated as zero load or as a confirmed pickup.
+
+While released, cycle progression pauses and completed cycles remain unchanged.
+Orientation tracking and data recording continue. Picking the object up resumes
+counting with the **original trial neutral and angle reference**, requiring a
+complete cycle through that neutral; release never recalibrates the neutral or
+re-zeros the angle. Genuine tracking interruptions still follow the separate
+tracking-loss policy above. Angle calibration and manual finger gaiting are not
+subject to this cycle-release rule.
+
+Force callbacks retain release/pickup transitions independently of GUI redraws.
+The GUI processes them together with poses in receipt-time order, so a cycle
+completed before release remains counted. `rotation_progress.csv` uses phase
+`object_released` during excluded motion. Trial metadata records the threshold
+and neutral policy in `rotation_release_detection`, plus `object_release_count`
+and `object_release_events`. A force-transition queue overflow is reported for
+review rather than silently contributing uncertain motion to a cycle.
+
 For example, `80R0` means the 80 mm object, Roll, repetition 0; it is displayed as `Task 1/5`. Both windows start in normal windowed mode. F11 toggles fullscreen in the focused window; Escape exits fullscreen. Move the participant window to its own monitor if needed. Both windows scale their fonts independently with their window size. The digital twin uses the same additional **1.30× uniform display scale** for the 50 mm and 80 mm models, including their reference axes. This display enlargement preserves model proportions and the original rotation origin. Restoring the window size restores its font sizes.
 
-The advisor's three charts show Thumb, Index, and Middle, each with three horizontal finger-force bars labeled Fx, Fy and Fz. Bar length represents absolute magnitude on a fixed **0-to-limit** scale, such as `0-10`: **red means positive**, **blue means negative**, and zero is neutral. All three charts share `FORCE_LIMIT_N` (in N) from `gui_config.py`. Values beyond the limit fill the available bar width while numeric labels and recorded samples retain their actual signed values. Raw torque remains available in the waveforms with its separate `TORQUE_LIMIT_NMM` limit. Starting a trial requires fresh sensor-4 tracking and, by default, all three finger-force streams. Interrupted or missing data and recorder queue overflows are flagged for review; stale bars are not presented as current measurements.
+The advisor's three charts show Thumb, Index, and Middle, each with three horizontal finger-force bars labeled Fx, Fy and Fz. Bar length represents absolute magnitude on a fixed **0-to-limit** scale, such as `0-10`: **red means positive**, **blue means negative**, and zero is neutral. All three charts share `FORCE_LIMIT_N` (in N) from `gui_config.py`. Values beyond the limit fill the available bar width while numeric labels and recorded samples retain their actual signed values. Raw torque remains available in the shared waveform plot, scaled using `FORCE_LIMIT_N` and `TORQUE_LIMIT_NMM`. Starting a trial requires fresh sensor-4 tracking and, by default, all three finger-force streams. Interrupted or missing data and recorder queue overflows are flagged for review; stale bars are not presented as current measurements.
 
 The advisor also shows **30-second sliding force/torque waveforms below the bar
 charts**. Drag the divider to adjust the two panels' heights. Smaller advisor
@@ -348,10 +372,13 @@ until one selected signal is cleared. **Clear all** resets the selection.
 Raw uses the ATI-calibrated, uncorrected acquisition topics in sensor
 axes; Finger transformed uses the central processor's bias-corrected three-axis
 finger-force topics. No signals are selected at startup; choose them in
-**Visualization option**. Force and torque use separate signed axes and units.
-Their fixed ranges are `-FORCE_LIMIT_N` to `+FORCE_LIMIT_N` and
-`-TORQUE_LIMIT_NMM` to `+TORQUE_LIMIT_NMM`, using the shared display limits in
-`gui_config.py`. Values outside these ranges are clipped in the plot without
+**Visualization option**. All selected force and torque signals appear in one
+full-width plot with a fixed signed force axis from `-FORCE_LIMIT_N` to
+`+FORCE_LIMIT_N`. Torque values in N·mm are displayed as
+`torque * FORCE_LIMIT_N / TORQUE_LIMIT_NMM`, using the limits in `gui_config.py`.
+For example, with limits of 10 N and 100 N·mm, 50 N·mm appears at the same height
+as 5 N. The legend identifies torque traces and their display scaling factor.
+Values outside the configured physical limits are clipped in the plot without
 changing the samples. Trace colors and the legend identify the selected signals.
 
 The chooser's **Apply force bias to Raw** option starts unchecked and does not
@@ -360,7 +387,7 @@ the central processor's active six-component sensor offsets from Raw waveforms
 for all three fingers. First unload the sensors and complete **Force bias** in
 the advisor. Missing or stale bias status shows **Waiting for Force bias**
 instead of uncorrected traces while this option is enabled. The current offsets
-apply to the whole displayed history. This option affects only Raw waveform
+apply to the whole displayed history, before torque display scaling. This option affects only Raw waveform
 display: finger-transformed signals are already corrected, and original Raw
 CSV data and source timestamps stay unchanged.
 
@@ -406,6 +433,7 @@ settings can be written as:
 NIDAQ_SAMPLE_RATE_HZ = 350.0
 LABJACK_SAMPLE_RATE_HZ = 350.0
 TF_WAIT_TOLERANCE_MS = 500.0
+RELEASE_FORCE_THRESHOLD_N = 0.5
 FORCE_LIMIT_N = 10.0
 TORQUE_LIMIT_NMM = 100.0
 ```
