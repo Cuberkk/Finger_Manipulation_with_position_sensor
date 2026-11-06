@@ -1,0 +1,320 @@
+{
+  "user_number": "001",
+  "trial": {
+    "reference": "00",
+    "code": "50R0",
+    "diameter_mm": 50,
+    "task": "roll",
+    "repetition": 0,
+    "practice": false
+  },
+  "started_local": "2026-11-05T17:48:36.888445-05:00",
+  "started_utc": "2026-11-05T22:48:36.888+00:00",
+  "timezone": "America/New_York",
+  "demo": false,
+  "data_recorded": true,
+  "demo_cycle_count_skipped": false,
+  "recording_kind": "trial",
+  "rotation_calibration": {
+    "positive_max_deg": 50.15612125750343,
+    "negative_max_deg": 72.10085925167968,
+    "target_deg": 50.15612125750343,
+    "selection_rule": "min(positive_max_deg, negative_max_deg)",
+    "user_number": "001",
+    "diameter_mm": 50,
+    "task": "roll",
+    "axis": "x",
+    "rotation_frame": "moving_object",
+    "started_utc": "2026-11-05T22:47:33.929+00:00",
+    "completed_utc": "2026-11-05T22:48:22.429+00:00",
+    "neutral_deg": 5.0,
+    "recording_path": "/home/erie_lab/Documents/kxz365/Github_repos/Finger_manipulation_with_Polhemus/User_Study_Data/User001/50mm/Roll/RotationCalibration/20261105_174733_928338",
+    "data_recorded": true,
+    "demo": false
+  },
+  "target_cycles": 20,
+  "target_deg": 50.15612125750343,
+  "neutral_deg": 5.0,
+  "cycle_detection": "pass_through",
+  "cycle_sequence": [
+    "neutral",
+    "negative_target",
+    "neutral",
+    "positive_target",
+    "neutral"
+  ],
+  "neutral_crossing": "linear_between_adjacent_valid_samples",
+  "count_mode": "automatic_rotation",
+  "mesh": "/home/erie_lab/Documents/kxz365/Github_repos/Finger_manipulation_with_Polhemus/utils/object_meshes/50mm.glb",
+  "mesh_origin_xyz": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "mesh_coordinate_unit": "mm",
+  "mesh_to_sensor4_matrix": [
+    [
+      -0.5,
+      0.8660254037844386,
+      0.0
+    ],
+    [
+      0.8660254037844386,
+      0.5,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      -1.0
+    ]
+  ],
+  "object_to_sensor4_matrix": [
+    [
+      -0.5,
+      0.8660254037844386,
+      0.0
+    ],
+    [
+      0.8660254037844386,
+      0.5,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      -1.0
+    ]
+  ],
+  "rotation_frame": "moving_object",
+  "mesh_rotation_frame": "baseline_object",
+  "baseline_xyzw": [
+    -0.006955691607849403,
+    0.05843434850799079,
+    0.9754309050606147,
+    -0.2123007176656101
+  ],
+  "baseline_source_timestamp_sec": 1793918916.8833685,
+  "orientation_tf": {
+    "parent": "polhemus_base",
+    "child": "sensor4"
+  },
+  "relative_orientation_formula": "A.T @ R0.T @ Rt @ A",
+  "axis_error_frame": "previous_object",
+  "axis_error_formula": "degrees(acos(abs(dot(increment_axis, task_axis))))",
+  "axis_increment_formula": "A.T @ R_previous.T @ R_current @ A",
+  "axis_error_minimum_rotation_deg": 0.05,
+  "axis_error_max_gap_sec": 0.5,
+  "incremental_angle_definition": "sum of signed task-axis twist from consecutive valid poses",
+  "cycle_angle_definition": "sum of signed task-axis increments since the latest tracking reference",
+  "cycle_angle_reset_policy": "re-zero on first valid pose after a tracking interruption",
+  "force_unit": "N",
+  "torque_unit": "N*mm",
+  "wrench_axes": "finger frame",
+  "torque_origin": "ATI sensing origin; axes rotated only; no moment-arm translation",
+  "topics": {
+    "thumb": "/ERIE_Manipulation/force/wrench_s1_finger1",
+    "index": "/ERIE_Manipulation/force/wrench_s3_finger3",
+    "middle": "/ERIE_Manipulation/force/wrench_s2_finger2"
+  },
+  "sensor_mapping": {
+    "thumb": 1,
+    "index": 3,
+    "middle": 2
+  },
+  "require_all_ft": true,
+  "raw_topics": {
+    "thumb": "/ERIE_Manipulation/acquisition/wrench_s1_uncorrected",
+    "index": "/ERIE_Manipulation/acquisition/wrench_s3_uncorrected",
+    "middle": "/ERIE_Manipulation/acquisition/wrench_s2_uncorrected"
+  },
+  "raw_axes": "ATI sensor frame",
+  "raw_bias_applied": false,
+  "force_bias": {
+    "schema_version": 1,
+    "captured_utc": "2026-11-05T22:48:36.888+00:00",
+    "processor_id": "410158546193491391bde5e6eaed632a",
+    "generation": 1,
+    "request_id": 1,
+    "status_seq": 291,
+    "biases": {
+      "1": [
+        -0.6403663598308015,
+        -2.654090151590962,
+        1.3412003145498315,
+        -28.237385178547026,
+        2.3744125916363,
+        30.092994609240144
+      ],
+      "2": [
+        1.936126034864666,
+        2.9864741981951233,
+        4.001886354374037,
+        46.87755928141176,
+        -6.043500876499738,
+        29.84102169024175
+      ],
+      "3": [
+        -0.41242774028716245,
+        -0.48590783215900707,
+        0.6575928681589697,
+        -6.525141219919067,
+        -1.6113647064552148,
+        39.80383808653958
+      ]
+    },
+    "bias_metadata": {
+      "bias_time_sec": 5.0,
+      "data_kind": "calibrated_uncorrected_wrench",
+      "elapsed_sec": 6.060029272994143,
+      "force_unit": "N",
+      "sample_counts": {
+        "1": 1274,
+        "2": 1274,
+        "3": 1750
+      },
+      "timestamp_semantics": "source_host_read_completion",
+      "torque_unit": "N-mm",
+      "warmup_sec": 0.5,
+      "window_end_unix_sec": 1793918775.8613799,
+      "window_start_unix_sec": 1793918770.8613799
+    },
+    "fields": [
+      "Fx",
+      "Fy",
+      "Fz",
+      "Tx",
+      "Ty",
+      "Tz"
+    ],
+    "units": {
+      "force": "N",
+      "torque": "N\u00b7mm"
+    },
+    "coordinate_frame": "ati_sensor",
+    "sensors": {
+      "thumb": 1,
+      "index": 3,
+      "middle": 2
+    },
+    "correction": "corrected = uncorrected - bias"
+  },
+  "storage_layout_version": 2,
+  "task_trial_number": 1,
+  "participant_directory": "User001",
+  "session_metadata_file": "SessionMetadata/Session_20261105_174635_258783/session_metadata.json",
+  "session_metadata_base": "participant_directory",
+  "acquisition_counters_start": {
+    "invalid": {
+      "wrench_thumb": 0,
+      "wrench_index": 0,
+      "wrench_middle": 0,
+      "raw_thumb": 0,
+      "raw_index": 0,
+      "raw_middle": 0,
+      "force_thumb": 0,
+      "force_index": 0,
+      "force_middle": 0
+    },
+    "gaps": {
+      "wrench_thumb": 0,
+      "wrench_index": 0,
+      "wrench_middle": 0,
+      "raw_thumb": 0,
+      "raw_index": 0,
+      "raw_middle": 0,
+      "force_thumb": 0,
+      "force_index": 0,
+      "force_middle": 0
+    },
+    "pose_drops": 0
+  },
+  "raw_force_schema": {
+    "schema_version": 2,
+    "calibrated": true,
+    "bias_applied": false,
+    "coordinate_frame": "ati_sensor",
+    "fields": [
+      "source_timestamp_sec",
+      "Fx",
+      "Fy",
+      "Fz",
+      "Tx",
+      "Ty",
+      "Tz"
+    ],
+    "units": {
+      "force": "N",
+      "torque": "N\u00b7mm",
+      "timestamp": "Unix seconds"
+    },
+    "timestamp_event": "acquisition host read completion",
+    "topics": {
+      "thumb": "/ERIE_Manipulation/acquisition/wrench_s1_uncorrected",
+      "index": "/ERIE_Manipulation/acquisition/wrench_s3_uncorrected",
+      "middle": "/ERIE_Manipulation/acquisition/wrench_s2_uncorrected"
+    },
+    "sensors": {
+      "thumb": 1,
+      "index": 3,
+      "middle": 2
+    }
+  },
+  "completed_cycles": 4,
+  "duration_sec": 54.31729905700195,
+  "accumulated_angle_deg": 13.737491379732404,
+  "incremental_angle_continuous": true,
+  "notes": "",
+  "tracking_interruptions": 0,
+  "ft_interruptions": {
+    "thumb": 0,
+    "index": 0,
+    "middle": 0
+  },
+  "ft_stale_at_finish": {
+    "thumb": false,
+    "index": false,
+    "middle": false
+  },
+  "quality_issues": [],
+  "acquisition_counters_end": {
+    "invalid": {
+      "wrench_thumb": 0,
+      "wrench_index": 0,
+      "wrench_middle": 0,
+      "raw_thumb": 0,
+      "raw_index": 0,
+      "raw_middle": 0,
+      "force_thumb": 0,
+      "force_index": 0,
+      "force_middle": 0
+    },
+    "gaps": {
+      "wrench_thumb": 0,
+      "wrench_index": 0,
+      "wrench_middle": 0,
+      "raw_thumb": 0,
+      "raw_index": 0,
+      "raw_middle": 0,
+      "force_thumb": 0,
+      "force_index": 0,
+      "force_middle": 0
+    },
+    "pose_drops": 0
+  },
+  "result": "closed",
+  "finished_utc": "2026-11-05T22:49:31.256+00:00",
+  "recorded_counts": {
+    "thumb": 13861,
+    "index": 18959,
+    "middle": 13861
+  },
+  "raw_recorded_counts": {
+    "thumb": 13863,
+    "index": 18959,
+    "middle": 13863
+  },
+  "orientation_samples": 3224,
+  "writer_queue_overflows": 0,
+  "write_error": null
+}

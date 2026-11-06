@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "captured_utc": "2026-11-05T22:48:36.888+00:00",
+  "processor_id": "410158546193491391bde5e6eaed632a",
+  "generation": 1,
+  "request_id": 1,
+  "status_seq": 291,
+  "biases": {
+    "1": [
+      -0.6403663598308015,
+      -2.654090151590962,
+      1.3412003145498315,
+      -28.237385178547026,
+      2.3744125916363,
+      30.092994609240144
+    ],
+    "2": [
+      1.936126034864666,
+      2.9864741981951233,
+      4.001886354374037,
+      46.87755928141176,
+      -6.043500876499738,
+      29.84102169024175
+    ],
+    "3": [
+      -0.41242774028716245,
+      -0.48590783215900707,
+      0.6575928681589697,
+      -6.525141219919067,
+      -1.6113647064552148,
+      39.80383808653958
+    ]
+  },
+  "bias_metadata": {
+    "bias_time_sec": 5.0,
+    "data_kind": "calibrated_uncorrected_wrench",
+    "elapsed_sec": 6.060029272994143,
+    "force_unit": "N",
+    "sample_counts": {
+      "1": 1274,
+      "2": 1274,
+      "3": 1750
+    },
+    "timestamp_semantics": "source_host_read_completion",
+    "torque_unit": "N-mm",
+    "warmup_sec": 0.5,
+    "window_end_unix_sec": 1793918775.8613799,
+    "window_start_unix_sec": 1793918770.8613799
+  },
+  "fields": [
+    "Fx",
+    "Fy",
+    "Fz",
+    "Tx",
+    "Ty",
+    "Tz"
+  ],
+  "units": {
+    "force": "N",
+    "torque": "N\u00b7mm"
+  },
+  "coordinate_frame": "ati_sensor",
+  "sensors": {
+    "thumb": 1,
+    "index": 3,
+    "middle": 2
+  },
+  "correction": "corrected = uncorrected - bias"
+}

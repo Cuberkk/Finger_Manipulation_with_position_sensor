@@ -97,8 +97,11 @@ class ResponsiveFonts:
                 widget.configure(font=font)
                 if isinstance(widget, ttk.Combobox):
                     self._comboboxes.append((widget, font))
-            elif isinstance(widget, ttk.Widget):
-                # ttk buttons/labels use styles rather than a -font option.
+            elif isinstance(widget, (ttk.Button, ttk.Checkbutton, ttk.Radiobutton,
+                                     ttk.Menubutton, ttk.Labelframe, ttk.Treeview)):
+                # Only text-bearing controls need a font style. Scrollbars,
+                # panes and other structural widgets keep their native styles;
+                # prefixing those names can break orientation-specific layouts.
                 original = widget.cget("style") or widget.winfo_class()
                 if original not in self._style_fonts:
                     font = self._copy_font(self._style.lookup(original, "font") or "TkDefaultFont")

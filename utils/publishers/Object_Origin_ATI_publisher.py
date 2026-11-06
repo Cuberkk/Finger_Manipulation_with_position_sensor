@@ -1,6 +1,9 @@
-# python -m utils.publishers.Object_Origin_ATI_publisher --ros-args -p diameter_mm:=50
+"""Compute contact-frame force from raw ATI F/T and confirmed central offsets."""
+
+from collections import deque
 from pathlib import Path
 import sys
+import time
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -8,7 +11,11 @@ if __package__ in (None, ""):
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, String
+
+from utils.gui.rest import load_study_settings
+from utils.gui.study_io import ROSBridge, FORCE_BIAS_STATUS_TOPIC, FORCE_BIAS_STATUS_MAX_AGE
+from utils.paths import GUI_CONFIG_FILE
 
 
 GEOMETRY_BY_DIAMETER_MM = {
@@ -16,7 +23,7 @@ GEOMETRY_BY_DIAMETER_MM = {
         "finger_l": 21.778,
         "finger_H": 10.996,
         "finger_R": 26.18,
-        #add on 1.18 to accomodate for the rubber grip thickness 
+        # Includes 1.18 mm for the rubber grip thickness.
     },
     80: {
         # Change these to your real 80 mm object geometry.
@@ -30,6 +37,20 @@ GEOMETRY_BY_DIAMETER_MM = {
 class ObjectForceGeometryNode(Node):
     def __init__(self):
         super().__init__("object_force_geometry_node")
+        try:
+            self._initialize()
+        except BaseException:
+            self.destroy_node()
+            raise
+
+    def _initialize(self):
+        settings = load_study_settings(GUI_CONFIG_FILE)
+        self.max_source_age_sec = settings.tf_wait_tolerance_ms / 1000.0
+        self._bias_status = None
+        self._bias_arrival = None
+        self._bias_valid = False
+        self._retired_processors = deque(maxlen=16)
+        self._last_source_stamps = {}
 
         self.declare_parameter("diameter_mm", 50)
         self.diameter_mm = int(self.get_parameter("diameter_mm").value)
@@ -72,21 +93,24 @@ class ObjectForceGeometryNode(Node):
 
         self.sub_s1 = self.create_subscription(
             Float64MultiArray,
-            "/ERIE_Manipulation/force/force_s1_raw",
+            "/ERIE_Manipulation/acquisition/wrench_s1_uncorrected",
             lambda msg: self.raw_force_callback(msg, "sensor1", self.pub_s1),
             100,
         )
         self.sub_s2 = self.create_subscription(
             Float64MultiArray,
-            "/ERIE_Manipulation/force/force_s2_raw",
+            "/ERIE_Manipulation/acquisition/wrench_s2_uncorrected",
             lambda msg: self.raw_force_callback(msg, "sensor2", self.pub_s2),
             100,
         )
         self.sub_s3 = self.create_subscription(
             Float64MultiArray,
-            "/ERIE_Manipulation/force/force_s3_raw",
+            "/ERIE_Manipulation/acquisition/wrench_s3_uncorrected",
             lambda msg: self.raw_force_callback(msg, "sensor3", self.pub_s3),
             100,
+        )
+        self.status_subscription = self.create_subscription(
+            String, FORCE_BIAS_STATUS_TOPIC, self._on_processing_status, 10,
         )
 
         self.get_logger().info(
@@ -94,25 +118,77 @@ class ObjectForceGeometryNode(Node):
             f"l={self.finger_l}, H={self.finger_H}, R={self.finger_R}"
         )
 
-    def raw_force_callback(self, msg, sensor_name, publisher):
-        data = np.asarray(msg.data, dtype=np.float64)
+    def _on_processing_status(self, message):
+        """Accept fresh, ordered central bias identities without requesting a tare."""
+        try:
+            status = ROSBridge._parse_force_bias_status(message.data)
+        except (ValueError, TypeError, OverflowError):
+            self._bias_valid = False
+            return False
+        previous = self._bias_status
+        if status["processor_id"] in self._retired_processors:
+            return False
+        if previous and previous["processor_id"] == status["processor_id"]:
+            if (status["status_seq"] <= previous["status_seq"]
+                    or status["request_id"] < previous["request_id"]
+                    or status["generation"] < previous["generation"]):
+                return False
+        elif previous:
+            self._retired_processors.append(previous["processor_id"])
+        if previous is None or any(status[field] != previous[field]
+                                   for field in ("processor_id", "request_id", "generation")):
+            self._last_source_stamps.clear()
+        self._bias_status = status
+        self._bias_arrival = time.monotonic()
+        self._bias_valid = True
+        return True
 
-        # Expected from your raw publishers:
-        # [Fx, Fy, Fz, Tx, Ty, Tz, timestamp_sec]
-        if data.size < 7:
+    def _active_bias(self, sensor_name):
+        status = self._bias_status
+        if (not self._bias_valid or status is None or self._bias_arrival is None
+                or not 0 <= time.monotonic() - self._bias_arrival <= FORCE_BIAS_STATUS_MAX_AGE
+                or not status["ready"] or status["busy"] or status["generation"] < 1
+                or status["biases"] is None):
+            return None
+        return np.asarray(status["biases"][sensor_name[len("sensor"):]], dtype=np.float64)
+
+    def raw_force_callback(self, msg, sensor_name, publisher):
+        try:
+            data = np.asarray(msg.data, dtype=np.float64)
+        except (ValueError, TypeError, OverflowError):
+            data = np.array([])
+        if data.shape != (7,) or not np.isfinite(data).all():
             self.get_logger().warn(
-                f"[{sensor_name}] Expected [Fx,Fy,Fz,Tx,Ty,Tz,timestamp], "
-                f"got {data.size} values"
+                f"[{sensor_name}] Expected six finite raw F/T components and a timestamp.",
+                throttle_duration_sec=5.0,
             )
             return
-
-        force_raw = data[0:3]
-        torque_raw = data[3:6]
-        timestamp_sec = data[-1]
+        timestamp_sec = float(data[6])
+        if timestamp_sec <= 0 or abs(time.time() - timestamp_sec) > self.max_source_age_sec:
+            return
+        previous_stamp = self._last_source_stamps.get(sensor_name)
+        if previous_stamp is not None and timestamp_sec <= previous_stamp:
+            return
+        bias = self._active_bias(sensor_name)
+        if bias is None:
+            self.get_logger().warn(
+                "Waiting for fresh, completed central Force bias before contact-force processing.",
+                throttle_duration_sec=5.0,
+            )
+            return
+        metadata = self._bias_status["bias_metadata"] or {}
+        window_end = metadata.get("window_end_unix_sec")
+        if (isinstance(window_end, (int, float)) and not isinstance(window_end, bool)
+                and timestamp_sec <= window_end):
+            return
+        self._last_source_stamps[sensor_name] = timestamp_sec
+        with np.errstate(over="ignore", invalid="ignore"):
+            corrected = data[:6] - bias
+        if not np.isfinite(corrected).all():
+            return
 
         force_obj, torque_obj = self.rotate_to_object_origin_frame(
-            force_raw,
-            torque_raw,
+            corrected[:3], corrected[3:],
         )
 
         contact = self.solve_contact_position(

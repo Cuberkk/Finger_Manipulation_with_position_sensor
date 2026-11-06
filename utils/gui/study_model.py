@@ -293,18 +293,31 @@ class RotationRangeCalibration:
 
     Extrema use the tracker's accumulated local task-axis angle, including
     small increments whose rotation-axis direction is hidden. The smaller
-    positive/negative magnitude becomes a symmetric target. An interruption
+    positive/negative magnitude and optional configured cap become a symmetric
+    target; recorded extrema retain the full observed range. An interruption
     permanently invalidates this attempt; create a new calibration to retry.
     """
 
-    def __init__(self):
+    def __init__(self, target_cap_deg: float | None = None):
+        if target_cap_deg is not None:
+            message = "Target cap must be a finite, positive angle in degrees."
+            if isinstance(target_cap_deg, bool) or not isinstance(target_cap_deg, (int, float)):
+                raise ValueError(message)
+            try:
+                target_cap_deg = float(target_cap_deg)
+            except (ValueError, OverflowError) as exc:
+                raise ValueError(message) from exc
+            if not math.isfinite(target_cap_deg) or target_cap_deg <= 0:
+                raise ValueError(message)
+        self.target_cap_deg = target_cap_deg
         self.positive_max_deg = 0.0
         self.negative_max_deg = 0.0
         self.continuous = True
 
     @property
     def target_deg(self) -> float:
-        return min(self.positive_max_deg, self.negative_max_deg)
+        measured_target = min(self.positive_max_deg, self.negative_max_deg)
+        return measured_target if self.target_cap_deg is None else min(measured_target, self.target_cap_deg)
 
     def invalidate(self):
         """Keep recorded limits while marking this attempt unusable."""
@@ -338,13 +351,19 @@ class RotationRangeCalibration:
             raise ValueError("Neutral band must be a finite nonnegative angle.")
         if not self.continuous:
             raise ValueError("Tracking interrupted during range calibration. Restart calibration.")
+        if self.target_cap_deg is not None and self.target_cap_deg <= neutral:
+            raise ValueError("Configured target cap must be greater than the neutral band.")
         if (not math.isfinite(self.positive_max_deg) or not math.isfinite(self.negative_max_deg)
-                or self.target_deg <= neutral):
+                or min(self.positive_max_deg, self.negative_max_deg) <= neutral):
             raise ValueError("Measure both positive and negative limits beyond the neutral band.")
-        return {"positive_max_deg": self.positive_max_deg,
-                "negative_max_deg": self.negative_max_deg,
-                "target_deg": self.target_deg,
-                "selection_rule": "min(positive_max_deg, negative_max_deg)"}
+        result = {"positive_max_deg": self.positive_max_deg,
+                  "negative_max_deg": self.negative_max_deg,
+                  "target_deg": self.target_deg,
+                  "selection_rule": "min(positive_max_deg, negative_max_deg)"}
+        if self.target_cap_deg is not None:
+            result.update(target_cap_deg=self.target_cap_deg,
+                          selection_rule="min(positive_max_deg, negative_max_deg, target_cap_deg)")
+        return result
 
 
 class RotationCounter:

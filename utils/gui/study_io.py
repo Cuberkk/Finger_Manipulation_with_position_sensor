@@ -16,13 +16,14 @@ from collections import deque
 
 import numpy as np
 
+from utils.gui.force_history import ForceHistory, ForceHistorySample
 from utils.gui.study_model import normalize_quaternion
 
 FINGERS = ("thumb", "index", "middle")
 SENSORS = {"thumb": 1, "index": 3, "middle": 2}
-WRENCH_TOPICS = {f: f"/ERIE_Manipulation/force/wrench_s{s}_finger{s}" for f, s in SENSORS.items()}
 RAW_TOPICS = {f: f"/ERIE_Manipulation/acquisition/wrench_s{s}_uncorrected" for f, s in SENSORS.items()}
 FORCE_TOPICS = {f: f"/ERIE_Manipulation/force/force_s{s}_finger{s}" for f, s in SENSORS.items()}
+FORCE_HEADER = ("source_timestamp_sec", "Fx", "Fy", "Fz")
 FT_HEADER = ("source_timestamp_sec", "Fx", "Fy", "Fz", "Tx", "Ty", "Tz")
 AXIS_ERROR_HEADER = (
     "source_timestamp_sec", "elapsed_sec", "step_rotation_deg", "step_angle_deg",
@@ -232,6 +233,13 @@ class TrialWriter:
     def __init__(self, path, metadata, queue_size=150000):
         self.path = Path(path)
         self.metadata = deepcopy(metadata)
+        self.metadata["finger_force_schema"] = {
+            "schema_version": 1, "calibrated": True, "bias_applied": True,
+            "coordinate_frame": "finger", "fields": list(FORCE_HEADER),
+            "units": {"force": "N", "timestamp": "Unix seconds"},
+            "timestamp_event": "acquisition host read completion",
+            "topics": dict(FORCE_TOPICS), "sensors": dict(SENSORS),
+        }
         self.metadata["raw_force_schema"] = {
             "schema_version": 2, "calibrated": True, "bias_applied": False,
             "coordinate_frame": "ati_sensor", "fields": list(FT_HEADER),
@@ -256,7 +264,11 @@ class TrialWriter:
 
     def add(self, kind, finger, values):
         with self.lock:
-            if not self.accepting or (kind == "axis_error" and finger is not None):
+            if (not self.accepting or kind not in ("force", "raw", "pose", "progress", "axis_error")
+                    or (kind not in ("force", "raw") and finger is not None)):
+                return False
+            if kind in ("force", "raw") and (
+                    finger not in self.counts or len(values) != (4 if kind == "force" else 7)):
                 return False
             try:
                 self.queue.put_nowait((kind, finger, tuple(values)))
@@ -300,7 +312,7 @@ class TrialWriter:
                 with (self.path / "force_bias.json").open("x", encoding="utf-8") as stream:
                     json.dump(initial_metadata["force_bias"], stream, indent=2, allow_nan=False)
                     stream.write("\n")
-            specs = [(('wrench', f), f"{f}.csv", FT_HEADER) for f in FINGERS]
+            specs = [(('force', f), f"{f}.csv", FORCE_HEADER) for f in FINGERS]
             specs += [(('raw', f), f"{f}_raw_force.csv", FT_HEADER) for f in FINGERS]
             specs += [(("pose", None), "object_orientation.csv", ("source_timestamp_sec", "qx", "qy", "qz", "qw")),
                       (("progress", None), "rotation_progress.csv", ("source_timestamp_sec", "elapsed_sec", "angle_deg", "completed_cycles", "phase")),
@@ -321,7 +333,7 @@ class TrialWriter:
                         break
                     continue
                 writers[(kind, finger)].writerow(values)
-                if kind == "wrench":
+                if kind == "force":
                     self.counts[finger] += 1
                 elif kind == "raw":
                     self.raw_counts[finger] += 1
@@ -384,7 +396,7 @@ class TrialWriter:
 
 
 class PreviewWriter:
-    """Track a demo trial's lifecycle without writing or retaining its samples."""
+    """Track a measurement lifecycle without writing or retaining its samples."""
     recording_enabled = False
 
     def __init__(self, metadata):
@@ -408,7 +420,10 @@ class PreviewWriter:
         with self.lock:
             if not self.accepting:
                 return False
-            if kind == "wrench" and finger in self.counts:
+            if kind in ("force", "raw") and (
+                    finger not in self.counts or len(values) != (4 if kind == "force" else 7)):
+                return False
+            if kind == "force" and finger in self.counts:
                 self.counts[finger] += 1
             elif kind == "raw" and finger in self.raw_counts:
                 self.raw_counts[finger] += 1
@@ -438,18 +453,21 @@ class PreviewWriter:
 
 
 class ROSBridge:
-    """Own ROS callbacks on a worker; Tk reads snapshots and a bounded pose history."""
+    """Own ROS callbacks on a worker; Tk reads snapshots and bounded histories."""
     def __init__(self, demo, events, pose_rate=60.0):
         self.demo = demo
         self.events = events
         self.pose_rate = pose_rate
         self.stop_event = threading.Event()
         self.lock = threading.Lock()
-        self.values = {(kind, f): None for kind in ("wrench", "raw", "force") for f in FINGERS}
+        self.values = {(kind, f): None for kind in ("raw", "force") for f in FINGERS}
         self.times = {key: 0.0 for key in self.values}
         self.rates = {key: deque(maxlen=120) for key in self.values}
         self.invalid = {key: 0 for key in self.values}
         self.gaps = {key: 0 for key in self.values}
+        self.force_history = ForceHistory(
+            (kind, finger) for kind in ("raw", "force") for finger in FINGERS
+        )
         self.pose = None
         self.poses = deque(maxlen=3000)
         self.pose_drops = 0
@@ -480,6 +498,8 @@ class ROSBridge:
     def sample_force(self, kind, finger, data, arrival=None):
         arrival = time.monotonic() if arrival is None else arrival
         key = kind, finger
+        if key not in self.values:
+            return
         required = 4 if kind == "force" else 7
         try:
             values = tuple(float(v) for v in data)
@@ -496,8 +516,11 @@ class ROSBridge:
             self.values[key] = values
             self.times[key] = arrival
             self.rates[key].append(arrival)
-            if self.writer and kind in ("raw", "wrench"):
-                self.writer.add(kind, finger, (values[-1], *values[:6]))
+            self.force_history.append(
+                key, ForceHistorySample(arrival, values[-1], values[:-1])
+            )
+            if self.writer:
+                self.writer.add(kind, finger, (values[-1], *values[:-1]))
 
     def sample_pose(self, quaternion, source_timestamp, arrival=None):
         arrival = time.monotonic() if arrival is None else arrival
@@ -520,13 +543,16 @@ class ROSBridge:
         with self.lock:
             fingers = {}
             for finger in FINGERS:
-                key = "wrench", finger
+                key = "force", finger
                 arrivals = self.rates[key]
                 rate = (len(arrivals) - 1) / (arrivals[-1] - arrivals[0]) if len(arrivals) > 1 and arrivals[-1] > arrivals[0] else 0.0
-                fingers[finger] = {"value": self.values[key], "arrival": self.times[key], "rate": rate,
-                                   "force": self.values[("force", finger)], "force_arrival": self.times[("force", finger)]}
+                fingers[finger] = {"value": self.values[key], "arrival": self.times[key], "rate": rate}
             return {"fingers": fingers, "pose": self.pose, "pose_drops": self.pose_drops,
                     "error": self.error, "force_bias": self._force_bias_snapshot_locked(time.monotonic())}
+
+    def force_history_snapshot(self, now=None):
+        """Copy the rolling plot history separately from frequent status reads."""
+        return self.force_history.snapshot(now)
 
     def _force_bias_snapshot_locked(self, now):
         status = self._force_bias_status
@@ -841,7 +867,7 @@ class ROSBridge:
                 values = (2.0 * math.sin(now * 1.3 + index), 1.5 * math.cos(now + index),
                           5.0 + 2.0 * math.sin(now * .6 + index), 35.0 * math.sin(now + index),
                           18.0 * math.cos(now * .8 + index), 28.0 * math.sin(now * .5 + index), stamp)
-                self.sample_force("wrench", finger, values, now)
+                self.sample_force("force", finger, (*values[:3], stamp), now)
                 self.sample_force("raw", finger, values, now)
             with self.lock:
                 start, axis, target = self.demo_motion_start, self.demo_axis, self.demo_target
@@ -887,7 +913,7 @@ class ROSBridge:
             executor = SingleThreadedExecutor(context=context)
             executor.add_node(node)
             subscriptions = []
-            for kind, topics in (("wrench", WRENCH_TOPICS), ("raw", RAW_TOPICS), ("force", FORCE_TOPICS)):
+            for kind, topics in (("raw", RAW_TOPICS), ("force", FORCE_TOPICS)):
                 for finger, topic in topics.items():
                     def receive(message, kind=kind, finger=finger):
                         self.sample_force(kind, finger, message.data)
@@ -915,7 +941,7 @@ class ROSBridge:
                     pass
 
             timer = node.create_timer(1.0 / self.pose_rate, receive_pose)
-            self.events.put(("info", "ROS connected. Waiting for sensor4 and finger-frame F/T streams."))
+            self.events.put(("info", "ROS connected. Waiting for sensor4 and finger-frame force streams."))
             while not self.stop_event.is_set() and context.ok():
                 executor.spin_once(timeout_sec=.05)
                 self._poll_force_bias(bias_client, Trigger.Request)

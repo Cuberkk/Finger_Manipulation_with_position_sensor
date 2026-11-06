@@ -14,7 +14,8 @@ from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Float64MultiArray
 from tf2_msgs.msg import TFMessage
 
-from utils.paths import CALIBRATION_DIR
+from utils.paths import CALIBRATION_DIR, GUI_CONFIG_FILE
+from utils.gui.rest import load_study_settings
 from utils.acquisition.NIDAQReaderDual import NIDAQReaderDual
 from utils.acquisition.source_clock import source_time
 
@@ -34,7 +35,8 @@ class NIDAQATINode(Node):
         self.cal1_path = CALIBRATION_DIR / 'FT44298.cal'
         self.cal2_path = CALIBRATION_DIR / 'FT45281.cal'
         self.phys_channels = 'Dev1/ai0:7,Dev1/ai16:19'
-        self.publish_rate = 350.0
+        settings = load_study_settings(GUI_CONFIG_FILE)
+        self.publish_rate = settings.nidaq_sample_rate_hz
         self.nidaq_reader = NIDAQReaderDual(
             cal1_path=self.cal1_path,
             cal2_path=self.cal2_path,
@@ -58,7 +60,8 @@ class NIDAQATINode(Node):
         )
         self.timer = self.create_timer(1.0 / self.publish_rate, self.timer_callback)
         self.get_logger().info(
-            f"NI-DAQ targets {self.publish_rate:g} Hz and publishes ATI force/torque without bias subtraction; "
+            f"NI-DAQ targets {self.publish_rate:g} Hz from {GUI_CONFIG_FILE} "
+            "and publishes ATI force/torque without bias subtraction; "
             "start the central force processor for bias and coordinate transforms. "
             "A /tf no-op subscription is enabled for executor wakeups."
         )

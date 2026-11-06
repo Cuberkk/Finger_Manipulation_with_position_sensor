@@ -1,0 +1,35 @@
+# Shared GUI, acquisition, and central ATI settings: literal assignments only.
+# This file is read without execution. Restart the affected process after edits.
+# Rest time between trials, tasks, and objects, in minutes.
+trials = 1.0
+tasks = 2.0
+objects = 5.0
+
+# Hardware sampling and ROS publication targets, in Hz; finite positive numbers.
+# Each publisher reads its local copy at startup. Restart it after rate changes.
+NIDAQ_SAMPLE_RATE_HZ = 600.0
+LABJACK_SAMPLE_RATE_HZ = 350.0
+
+# Maximum ATI sample age while waiting for matching Polhemus TF, in milliseconds.
+# Shorter TF waits are retried silently; expired samples are dropped with a warning.
+TF_WAIT_TOLERANCE_MS = 500.0
+
+# Positive magnitude limits shared by all advisor bars and waveforms.
+# Bars show 0-limit; waveforms use signed axes from -limit to +limit.
+# Bar red indicates positive and blue indicates negative values.
+# Force is N; torque is N*mm. Each limit must be a finite positive number.
+FORCE_LIMIT_N = 10.0
+TORQUE_LIMIT_NMM = 100.0
+
+# Practice targets and upper bounds for calibrated trial targets, in degrees.
+# Keys are object diameters in millimetres. Measured targets use the smaller of
+# both measured directional limits and the configured bound for that diameter.
+PRACTICE_TARGETS_DEG = {50: 20, 80: 10}
+
+# v_sensor4 = SENSOR4_FROM_OBJECT @ v_object.
+# 0.8660254037844386 is sqrt(3) / 2; keep matrix entries as numeric literals.
+SENSOR4_FROM_OBJECT = [
+    [-0.5, 0.8660254037844386, 0.0],
+    [0.8660254037844386, 0.5, 0.0],
+    [0.0, 0.0, -1.0],
+]

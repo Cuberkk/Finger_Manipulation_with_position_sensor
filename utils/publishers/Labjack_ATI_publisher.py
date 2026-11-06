@@ -12,7 +12,8 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import Float64MultiArray
 
-from utils.paths import CALIBRATION_DIR
+from utils.paths import CALIBRATION_DIR, GUI_CONFIG_FILE
+from utils.gui.rest import load_study_settings
 from utils.acquisition.LabjackReader import LabjackATIReader
 from utils.acquisition.source_clock import source_time
 
@@ -30,7 +31,8 @@ class LabjackATINode(Node):
 
     def _initialize(self):
         self.cal_path = CALIBRATION_DIR / 'FT44297.cal'
-        self.publish_rate = 350.0
+        settings = load_study_settings(GUI_CONFIG_FILE)
+        self.publish_rate = settings.labjack_sample_rate_hz
         self.ati_reader = LabjackATIReader(
             cal_path=self.cal_path,
             aq_rate=self.publish_rate,
@@ -43,7 +45,8 @@ class LabjackATINode(Node):
         )
         self.timer = self.create_timer(1.0 / self.publish_rate, self.timer_callback)
         self.get_logger().info(
-            f"LabJack targets {self.publish_rate:g} Hz and publishes ATI force/torque without bias subtraction; "
+            f"LabJack targets {self.publish_rate:g} Hz from {GUI_CONFIG_FILE} "
+            "and publishes ATI force/torque without bias subtraction; "
             "start the central force processor for bias and coordinate transforms."
         )
 

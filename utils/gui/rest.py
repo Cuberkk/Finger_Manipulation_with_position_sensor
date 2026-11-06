@@ -15,6 +15,13 @@ from utils.gui.study_model import TrialSpec
 
 _KINDS = ("trials", "tasks", "objects")
 _STUDY_SETTINGS = ("PRACTICE_TARGETS_DEG", "SENSOR4_FROM_OBJECT")
+_OPTIONAL_SETTINGS = ("TF_WAIT_TOLERANCE_MS", "FORCE_LIMIT_N", "TORQUE_LIMIT_NMM",
+                      "NIDAQ_SAMPLE_RATE_HZ", "LABJACK_SAMPLE_RATE_HZ")
+DEFAULT_TF_WAIT_TOLERANCE_MS = 500.0
+DEFAULT_FORCE_LIMIT_N = 10.0
+DEFAULT_TORQUE_LIMIT_NMM = 100.0
+DEFAULT_NIDAQ_SAMPLE_RATE_HZ = 350.0
+DEFAULT_LABJACK_SAMPLE_RATE_HZ = 350.0
 
 
 def _whole_seconds(value, name):
@@ -66,6 +73,11 @@ class StudySettings:
     rest_times: RestTimes
     practice_targets_deg: dict[int, float]
     sensor4_from_object: np.ndarray
+    tf_wait_tolerance_ms: float = DEFAULT_TF_WAIT_TOLERANCE_MS
+    force_limit_n: float = DEFAULT_FORCE_LIMIT_N
+    torque_limit_nmm: float = DEFAULT_TORQUE_LIMIT_NMM
+    nidaq_sample_rate_hz: float = DEFAULT_NIDAQ_SAMPLE_RATE_HZ
+    labjack_sample_rate_hz: float = DEFAULT_LABJACK_SAMPLE_RATE_HZ
 
 
 def _read_literal_settings(path: str | Path) -> dict:
@@ -87,8 +99,8 @@ def _read_literal_settings(path: str | Path) -> dict:
             name, expression = statement.target.id, statement.value
         else:
             raise ValueError("Study configuration must contain only literal assignments to "
-                             "trials, tasks, objects, PRACTICE_TARGETS_DEG, and SENSOR4_FROM_OBJECT.")
-        if name not in _KINDS + _STUDY_SETTINGS or name in values:
+                             + ", ".join(_KINDS + _STUDY_SETTINGS + _OPTIONAL_SETTINGS) + ".")
+        if name not in _KINDS + _STUDY_SETTINGS + _OPTIONAL_SETTINGS or name in values:
             raise ValueError(f"Unexpected or duplicate study setting: {name}.")
         try:
             values[name] = ast.literal_eval(expression)
@@ -171,8 +183,39 @@ def _sensor4_from_object(value) -> np.ndarray:
     return matrix
 
 
+def _tf_wait_tolerance_ms(value) -> float:
+    name = "TF_WAIT_TOLERANCE_MS"
+    message = f"{name} must be a finite, positive number of milliseconds."
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(message)
+    try:
+        milliseconds = float(value)
+    except (ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not math.isfinite(milliseconds) or milliseconds <= 0:
+        raise ValueError(message)
+    return milliseconds
+
+
+def _positive_setting(value, name: str) -> float:
+    message = f"{name} must be a finite, positive number."
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(message)
+    try:
+        limit = float(value)
+    except (ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not math.isfinite(limit) or limit <= 0:
+        raise ValueError(message)
+    return limit
+
+
 def load_study_settings(path: str | Path) -> StudySettings:
-    """Load required study settings from literal assignments without execution."""
+    """Load literal study, acquisition, timing and display settings.
+
+    Existing files with rest, targets and mounting keep the acquisition/timing/display
+    defaults. The configuration file is parsed without executing Python code.
+    """
     values = _read_literal_settings(path)
     missing = set(_STUDY_SETTINGS) - values.keys()
     if missing:
@@ -181,6 +224,16 @@ def load_study_settings(path: str | Path) -> StudySettings:
         rest_times=_rest_times_from_values(values),
         practice_targets_deg=_practice_targets(values["PRACTICE_TARGETS_DEG"]),
         sensor4_from_object=_sensor4_from_object(values["SENSOR4_FROM_OBJECT"]),
+        tf_wait_tolerance_ms=_tf_wait_tolerance_ms(
+            values.get("TF_WAIT_TOLERANCE_MS", DEFAULT_TF_WAIT_TOLERANCE_MS)),
+        force_limit_n=_positive_setting(
+            values.get("FORCE_LIMIT_N", DEFAULT_FORCE_LIMIT_N), "FORCE_LIMIT_N"),
+        torque_limit_nmm=_positive_setting(
+            values.get("TORQUE_LIMIT_NMM", DEFAULT_TORQUE_LIMIT_NMM), "TORQUE_LIMIT_NMM"),
+        nidaq_sample_rate_hz=_positive_setting(
+            values.get("NIDAQ_SAMPLE_RATE_HZ", DEFAULT_NIDAQ_SAMPLE_RATE_HZ), "NIDAQ_SAMPLE_RATE_HZ"),
+        labjack_sample_rate_hz=_positive_setting(
+            values.get("LABJACK_SAMPLE_RATE_HZ", DEFAULT_LABJACK_SAMPLE_RATE_HZ), "LABJACK_SAMPLE_RATE_HZ"),
     )
 
 

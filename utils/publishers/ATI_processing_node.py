@@ -1,8 +1,8 @@
 """Central ATI zeroing and finger-frame transforms; no device drivers are imported.
 
 Hardware publishers send factory-calibrated, uncorrected six-component wrenches.
-All three offsets live on this host, and the existing GUI/recorder topics retain
-both their schemas and the acquisition host's read timestamp.
+All three offsets live on this host. The central node publishes only corrected
+three-axis finger forces, preserving the acquisition host's read timestamp.
 """
 
 from collections import deque
@@ -29,8 +29,8 @@ import tf2_ros
 
 from utils.acquisition.bias import save_bias
 from utils.acquisition.central_bias import CentralBiasManager
-from utils.paths import BIAS_DIR
-from utils.publishers.wrench import rotate_wrench
+from utils.gui.rest import load_study_settings
+from utils.paths import BIAS_DIR, GUI_CONFIG_FILE
 
 
 SENSORS = (1, 2, 3)
@@ -63,7 +63,9 @@ class ATIProcessingNode(Node):
     def _initialize(self):
         self.processor_id = uuid.uuid4().hex
         self._status_seq = 0
-        self.max_age_sec = float(self.declare_parameter("max_sample_age_sec", 0.5).value)
+        settings = load_study_settings(GUI_CONFIG_FILE)
+        self.max_age_sec = float(self.declare_parameter(
+            "max_sample_age_sec", settings.tf_wait_tolerance_ms / 1000.0).value)
         self.max_tf_age_sec = float(self.declare_parameter("max_tf_age_sec", 1.5).value)
         if not math.isfinite(self.max_tf_age_sec) or self.max_tf_age_sec <= 0:
             raise ValueError("max_tf_age_sec must be finite and positive")
@@ -83,18 +85,12 @@ class ATIProcessingNode(Node):
         # A delayed TF can become available on the next timer tick. Bounded queues
         # keep exact source timestamps without blocking a subscription callback.
         self.pending = {sensor: deque(maxlen=1024) for sensor in SENSORS}
-        self.raw_publishers = {}
         self.force_publishers = {}
-        self.wrench_publishers = {}
         self.input_subscriptions = []
         for sensor in SENSORS:
             prefix = "/ERIE_Manipulation/force"
-            self.raw_publishers[sensor] = self.create_publisher(
-                Float64MultiArray, f"{prefix}/force_s{sensor}_raw", 10)
             self.force_publishers[sensor] = self.create_publisher(
                 Float64MultiArray, f"{prefix}/force_s{sensor}_finger{sensor}", 10)
-            self.wrench_publishers[sensor] = self.create_publisher(
-                Float64MultiArray, f"{prefix}/wrench_s{sensor}_finger{sensor}", 10)
             self.input_subscriptions.append(self.create_subscription(
                 Float64MultiArray, INPUT_TOPICS[sensor],
                 lambda message, sensor=sensor: self._on_sample(sensor, message),
@@ -180,10 +176,9 @@ class ATIProcessingNode(Node):
             if self.bias_manager.last_rejection:
                 self.get_logger().warn(self.bias_manager.last_rejection, throttle_duration_sec=5.0)
             return
-        # These legacy 'raw' topics carry zero-corrected ATI axes, as before.
-        self.raw_publishers[sensor].publish(Float64MultiArray(
-            data=np.append(corrected, stamp).tolist()))
-        self.pending[sensor].append((stamp, corrected.copy()))
+        # Acquisition already publishes all six raw components. Only force is
+        # needed for the finger-frame output and the source-time TF queue.
+        self.pending[sensor].append((stamp, corrected[:3].copy()))
         self._drain_sensor(sensor, time.time())
 
     def _publish_status(self, now_monotonic):
@@ -218,9 +213,15 @@ class ATIProcessingNode(Node):
     def _drain_sensor(self, sensor, now_wall):
         pending = self.pending[sensor]
         while pending:
-            stamp, corrected = pending[0]
-            if abs(now_wall - stamp) > self.max_age_sec:
+            stamp, corrected_force = pending[0]
+            age_sec = now_wall - stamp
+            if abs(age_sec) > self.max_age_sec:
                 pending.popleft()
+                self.get_logger().warn(
+                    f"Sensor {sensor}: dropping ATI sample outside the "
+                    f"{self.max_age_sec * 1000:g} ms age limit while waiting for "
+                    f"source-time Polhemus TF (sample age: {age_sec * 1000:.1f} ms).",
+                    throttle_duration_sec=5.0)
                 continue
             when = Time(seconds=stamp, clock_type=self.get_clock().clock_type)
             try:
@@ -238,11 +239,11 @@ class ATIProcessingNode(Node):
                 rot_base_obj = self._transform_rotation(obj)
                 rot_base_finger = self._transform_rotation(finger)
                 rotation = rot_base_finger.T @ rot_base_obj @ self.rot_obj_force[sensor]
-                wrench = rotate_wrench(rotation, corrected)
-            except tf2_ros.TransformException as exc:
-                self.get_logger().warn(
-                    f"Waiting for Polhemus TF at ATI source timestamp: {exc}",
-                    throttle_duration_sec=5.0)
+                force = rotation @ corrected_force
+            except tf2_ros.TransformException:
+                # A force sample can arrive before its matching tracking data.
+                # Retry silently until its source-age deadline (500 ms by
+                # default), preserving the requested measurement timestamp.
                 break
             except ValueError as exc:
                 pending.popleft()
@@ -250,9 +251,7 @@ class ATIProcessingNode(Node):
                 continue
             pending.popleft()
             self.force_publishers[sensor].publish(Float64MultiArray(
-                data=np.append(wrench[:3], stamp).tolist()))
-            self.wrench_publishers[sensor].publish(Float64MultiArray(
-                data=np.append(wrench, stamp).tolist()))
+                data=np.append(force, stamp).tolist()))
 
     def _transform_is_recent(self, transform, now_wall):
         stamp = transform.header.stamp

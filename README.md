@@ -41,97 +41,76 @@ Run the following commands from the repository root using the existing Python en
 
 For NI-DAQ on Windows and LabJack on this Linux computer, use centralized
 processing. Both acquisition nodes send ATI-calibrated **uncorrected** force and
-torque. Linux owns the bias for all three sensors and applies the Polhemus
-coordinate transforms. The Windows computer requires no bias commands or bias
+torque together. Linux owns the bias for all three sensors and transforms only
+the corrected force into the finger axes. The Windows computer requires no bias commands or bias
 file transfers during the experiment.
 
 The NI-DAQ and LabJack force pipelines perform device acquisition, ATI factory
-calibration, sample validation and publication. Both acquisition nodes request
-**350 Hz** hardware sampling and use a **1/350-second** publication timer.
+calibration, sample validation and publication. Their hardware sampling and ROS
+publication targets come from
+[gui_config.py](docs/user_study_docs/gui_config.py):
+
+```python
+NIDAQ_SAMPLE_RATE_HZ = 350.0
+LABJACK_SAMPLE_RATE_HZ = 350.0
+```
+
+Each publisher uses its own setting for both the reader's requested hardware
+rate and its `1/rate` publication timer. The NI setting applies to both thumb
+and middle sensors; the LabJack setting applies to the index sensor. Both
+settings must be finite positive numbers. Restart the corresponding acquisition
+publisher after editing. The Windows NI publisher reads the Windows repository's
+local file, and the Linux LabJack publisher reads the Linux repository's local
+file; copy the edited settings to the appropriate computer. Startup logs show
+the loaded path and target rate. These are requested rates; device clock
+constraints and ROS scheduling determine the achieved rate.
+
 They always send uncorrected sensor-frame force/torque. They have no local bias
 computation, bias vector, bias-file access, warmup window or TF transformation.
 The former direct-processing mode and hardware-node bias parameters have been
 removed; no `raw_only` option is needed. Bias is owned exclusively by the separate
 `ATI_processing_node`, controlled from the advisor's **Force bias** button.
 
-First start NI-DAQ in the Windows repository root:
+### Launch before the live GUI
 
-```powershell
-python -m utils.publishers.NIDAQ_ATI_publisher
-```
+Start these four processes in order, each in a separate terminal. Keep them
+running throughout the GUI session. Run the Python commands from this repository's
+root on the indicated computer, with the ROS environment sourced in each terminal.
 
-The NI-DAQ node subscribes to `/tf` with an empty callback so incoming messages
-can wake the executor. This wakeup subscription is always enabled, including in
-the diagnostic entry point below. It uses `tf2_msgs` and requires the live Polhemus
-`/tf` stream to reach Windows. The acquisition node performs no TF lookup or
-coordinate transformation. Restart both acquisition publishers after updating
-to apply the 350 Hz setting.
+| Order | Computer | Script / command | Purpose |
+| --- | --- | --- | --- |
+| 1 | Linux | `ros2 run viper_cpp viper_node` | Publish Polhemus tracking TF for `sensor1` through `sensor4` relative to `polhemus_base` |
+| 2 | Windows | `python -m utils.publishers.NIDAQ_ATI_publisher` | Acquire thumb and middle ATI sensors using `NIDAQ_SAMPLE_RATE_HZ` (default 350 Hz) |
+| 3 | Linux | `python -m utils.publishers.Labjack_ATI_publisher` | Acquire the index ATI sensor using `LABJACK_SAMPLE_RATE_HZ` (default 350 Hz) |
+| 4 | Linux | `python -m utils.publishers.ATI_processing_node` | Calibrate the shared bias and publish corrected three-axis finger force |
 
-If NI-DAQ topics appear slower than the configured 350 Hz, stop the normal
-NI-DAQ publisher and run this diagnostic entry point **on the Windows acquisition
-computer**, in the same environment:
+For step 1, source the Polhemus workspace's `install/setup.bash` before running
+the installed `viper_cpp` executable. In its interactive console, press lowercase
+**`t`** to select metres and quaternion orientation, then **`c`** to start continuous
+streaming. Confirm the tracking stream is running before proceeding.
 
-```powershell
-python -m utils.diagnostics.nidaq_rate --interval 5
-```
+Windows and Linux must use the same ROS domain and have synchronized clocks.
+The Polhemus `/tf` stream must also reach Windows: the NI-DAQ node uses its
+always-enabled empty `/tf` callback to wake the executor. It performs no TF lookup
+or coordinate transformation.
 
-It runs the original publisher and reports source-side counters every five
-seconds. `sample_clock_hz` is the device-reported clock setting;
-`drained_scans_hz` measures scans actually read from its buffer;
-`callbacks_hz` and `batches_hz` distinguish timer callbacks from nonempty reads.
-`publish_s1_hz` and `publish_s2_hz` count successful publish calls for each topic,
-not subscriber deliveries. `mean_batch` is scans per read, and
-`skipped_old_scans_hz` counts older buffered scans omitted by the reader's
-existing latest-scan policy. The diagnostic does not change that policy or the
-force values and source timestamps. It adds measurement overhead, so compare it
-with the normal entry point after diagnosis.
-
-`tf_messages_hz` confirms that `/tf` messages actually reach the acquisition node.
-A zero value means the wakeup subscription is not receiving dynamic TF messages.
-`reader_mean_ms` times the complete device-reader call, including the buffer
-availability query and calibration; `read_mean_ms` times only `task.read`.
-Use both alongside `publish_mean_ms` and `callback_mean_ms` to locate time spent
-inside the callback.
-
-If the rate remains low, compare the baseline diagnostic above with this second
-run on Windows, after stopping the first run:
-
-```powershell
-python -m utils.diagnostics.nidaq_rate --interval 5 --windows-timer-ms 1
-```
-
-This requests a 1 ms timer resolution using Windows `timeBeginPeriod` for the
-diagnostic process and pairs it with `timeEndPeriod` on exit, including errors
-and Ctrl+C. The ordinary publisher does not make this request. An accepted
-request does not guarantee a particular callback frequency: compare the measured
-rates. The experiment tests timer waiting without changing device sampling,
-sample selection or publication. Windows documents this API and its limitations
-in [timeBeginPeriod](https://learn.microsoft.com/en-us/windows/win32/api/timeapi/nf-timeapi-timebeginperiod).
-
-| Example source-side result | What to investigate |
-| --- | --- |
-| About 70 callbacks/s, 350 drained scans/s, mean batch 5, short callbacks | Timer scheduling on the acquisition host |
-| About 350 callbacks/s, 70 batches/s, mean batch 5 | Device/driver buffer updates or transfer batching |
-| About 70 callbacks/s, long `publish_mean_ms` | DDS publication blocking, including possible network/subscriber effects |
-| About 350 successful publish calls/s, Linux receives about 70/s | Transport, subscriber QoS or measurement overhead |
-
-Windows and Linux both reporting 70 Hz with `ros2 topic hz` does not distinguish
-these cases: the command measures its own subscription's receiving rate. In the
-first two examples, the original reader publishes just the last scan from each
-batch, so 350 hardware scans/s need not produce 350 messages/s per topic.
-
-On Linux, start LabJack in a separate terminal and start the existing Polhemus TF
-stream as usual:
+Start step 4 after both force acquisition publishers are running, with all three
+ATI sensors unloaded and stationary. Its default startup performs force-bias
+calibration automatically. After the processor reports successful calibration,
+open a fifth terminal on Linux and launch the live GUI:
 
 ```bash
-python -m utils.publishers.Labjack_ATI_publisher
+python -m utils.gui.study_gui
 ```
 
-Once the acquisition nodes are running, start the processing node on Linux:
+The GUI records its own CSV files and computes its own rotation feedback.
+`Object_Origin_ATI_publisher`, the standalone CSV recorders and `recoder_launch`,
+both rotational-error nodes, `object_axis_rviz_visualizer`, and RViz are optional
+tools and are not prerequisites for the GUI. For a simulated session, run
+`python -m utils.gui.study_gui --demo`; the four hardware processes are not
+required in demo mode.
 
-```bash
-python -m utils.publishers.ATI_processing_node
-```
+### Force-bias calibration
 
 Keep all three ATI sensors unloaded and stationary. The processor waits for fresh
 messages from every sensor, then uses one shared 0.5-second warmup and 5-second
@@ -172,7 +151,7 @@ central processor and GUI; both acquisition nodes can remain running.
 The button is disabled during preparation, recording, angle tests, saving, another
 bias operation, and when the processor is unavailable. It can be used during rest.
 Trial starts from the advisor or participant's Space key wait until the bias
-operation finishes, including when the F/T requirement checkbox is unchecked.
+operation finishes, including when the force-stream requirement checkbox is unchecked.
 Demo mode displays the button disabled and never sends a hardware request. The
 GUI controls an independently running central processor; start it as described
 above. It does not start acquisition nodes or the processor automatically.
@@ -190,9 +169,9 @@ nodes. Click **Force bias** in the advisor; subsequent zeroing uses the same
 button without restarting either acquisition node. Restart both the processor and
 GUI after updating to load the matching request/status protocol.
 
-Live trial and angle-test recording also require a fresh active bias snapshot
+Live trials and angle measurements also require a fresh active bias snapshot
 from the processor, including all three six-axis offsets. This applies even when
-the optional finger-frame F/T requirement is unchecked. Restart the processor and
+the optional finger-force requirement is unchecked. Restart the processor and
 GUI together after updating. At recording start the GUI archives the active bias;
 it does not request a new calibration automatically for each trial.
 
@@ -205,6 +184,20 @@ no local bias subtraction or TF transformation. The processor
 preserves that source timestamp in all outputs; it never replaces it with Linux
 receipt time. Current source timestamps represent acquisition-host read completion,
 not hardware clock timestamps or guaranteed simultaneous hardware sampling.
+
+The normal pipeline has **six data topics**, plus the processing-status topic:
+
+| Topic pattern | Payload | Meaning |
+| --- | --- | --- |
+| `/ERIE_Manipulation/acquisition/wrench_sN_uncorrected` | `[Fx, Fy, Fz, Tx, Ty, Tz, source_timestamp_sec]` | Raw ATI-calibrated force and torque together, before bias correction |
+| `/ERIE_Manipulation/force/force_sN_fingerN` | `[Fx, Fy, Fz, source_timestamp_sec]` | Bias-corrected force rotated into finger axes |
+| `/ERIE_Manipulation/force/processing_status` | JSON string | Bias readiness, offsets, transaction identity and errors |
+
+`N` is 1 (thumb/NI-DAQ), 2 (middle/NI-DAQ), or 3 (index/LabJack).
+The redundant `force_sN_raw` and `wrench_sN_fingerN` outputs have been removed.
+The central processor retains all six bias components for Raw display correction
+and offline analysis, but calculates and publishes only the three finger-force
+components. No transformed torque or zero torque placeholders are published.
 
 On Windows, acquisition publishers use the high-resolution UTC system clock
 `GetSystemTimePreciseAsFileTime`, including on older Python versions whose
@@ -224,9 +217,17 @@ confirm each acquisition topic has exactly one publisher with
 Windows and Linux must still have synchronized system clocks and a shared ROS 2
 domain/network. Stale/future timestamps and duplicate/out-of-order samples are
 rejected. The processor retries source-time TF lookups using bounded queues;
-missing TF suppresses transformed output while bias-corrected raw output continues.
-The existing `force_sN_raw`, `force_sN_fingerN`, and `wrench_sN_fingerN` topics
-keep their names, units and schemas, so the GUI and recorders work as before.
+missing TF suppresses transformed force while hardware Raw acquisition continues.
+TF waits within the default **500 ms** sample-age limit are normal and produce
+no warning. The processor retries the original ATI timestamp as tracking data
+arrives. Samples older than that limit are discarded with a throttled warning;
+set `TF_WAIT_TOLERANCE_MS` in [gui_config.py](docs/user_study_docs/gui_config.py)
+to change this limit. Restart the central ATI processing node after editing it.
+An explicit ROS `max_sample_age_sec` parameter takes precedence over the file;
+the configured milliseconds are otherwise converted to seconds automatically.
+The retained `force_sN_fingerN` topics keep their four-value force-only schema.
+Restart the processor and GUI together to remove the obsolete publishers and
+load the matching subscriptions and CSV schemas.
 Open the GUI with `python -m utils.gui.study_gui` to request or monitor calibration.
 
 Central calibration files are saved only on Linux at
@@ -244,7 +245,8 @@ snapshots remain beside their GUI recordings under `User_Study_Data/`.
 
 Central parameters include `bias_time_sec` (5.0), `bias_warmup_sec` (0.5),
 `bias_timeout_sec` (15.0), `bias_min_samples` (30 per sensor),
-`bias_max_gap_sec` (0.5), `max_sample_age_sec` (0.5) and `max_tf_age_sec` (1.5).
+`bias_max_gap_sec` (0.5), `max_sample_age_sec` (from `TF_WAIT_TOLERANCE_MS`,
+default 0.5 seconds) and `max_tf_age_sec` (1.5).
 The timeout must exceed warmup + measurement window + maximum sample age. For a
 10-second measurement window, use:
 
@@ -253,19 +255,23 @@ python -m utils.publishers.ATI_processing_node --ros-args -p bias_time_sec:=10.0
 ```
 
 If object-origin output is also needed, start its publisher on Linux after the
-central processor. It subscribes to the processor's bias-corrected raw topics:
+central processor. It subscribes directly to the combined Raw acquisition topics
+and processing status, subtracts the current six-axis bias locally, then uses
+force and torque for its existing contact-geometry calculation. It waits when
+the bias status is missing, busy or stale:
 
 ```bash
 python -m utils.publishers.Object_Origin_ATI_publisher --ros-args -p diameter_mm:=50
 ```
 
 Set `diameter_mm` to the object being used (`50` or `80`). The central processor
-subtracts each sensor's bias before transforming its force and torque. Zero scans
+subtracts each sensor's bias before transforming its three force components. Zero scans
 are valid; nonfinite readings and LabJack's skipped-scan markers are excluded.
 Central collection deadlines use monotonic time. Calibration files are staged,
 with recovery of the previous files attempted on a handled replacement failure.
 
-Record a trial with one of the following commands, or use the launcher below to start all three recorders:
+For standalone recording outside the GUI, use one of the following commands, or
+use the launcher below to start all three recorders:
 
 ```bash
 python -m utils.recording.force_trial_csv_recorder -u 1 -s 50 -t roll -tn 1
@@ -300,7 +306,7 @@ python -m utils.gui.study_gui
 
 The GUI opens separate researcher and participant windows. Demo mode runs with Tkinter and NumPy on a graphical desktop, generates simulated force/torque and tracking data, and saves it under `User_Study_Data/demo/` by default. Live mode uses the central processor's output and the Polhemus TF stream. The GUI records its own data; the standalone recorders are not needed for this workflow.
 
-In **demo mode**, the advisor has a **DEMO · DATA SAVING** row directly below the User Number / Trial controls at the top. Its **Save data (CSV + metadata)** checkbox is checked by default. Uncheck it to test the complete workflow without creating session folders, CSV files, or metadata files, including during angle tests. The choice applies to the next trial or angle test and is locked during preparation, recording, and saving; it can be changed during rest. The interface explicitly labels trials with recording disabled as **DEMO PREVIEW**. Live mode always records data. Restart the GUI after updating the code, using `python -m utils.gui.study_gui --demo`, to load the current interface.
+In **demo mode**, the advisor has a **DEMO · DATA SAVING** row directly below the User Number / Trial controls at the top. Its **Save data (CSV + metadata)** checkbox is checked by default. Uncheck it to test the complete workflow without creating session folders, CSV files, or metadata files. The choice applies to the next practice or measured trial and is locked during preparation, measurement, and saving; it can be changed during rest. Angle tests never save data, regardless of this checkbox. The interface labels demo trials with recording disabled as **DEMO PREVIEW**. Live practice and measured trials always record data. Restart the GUI after updating the code, using `python -m utils.gui.study_gui --demo`, to load the current interface.
 
 Demo participants can use **Space** to move through stages quickly: during the five-second preparation countdown it starts the trial immediately; during cycle counting it finishes the trial as `demo_skipped`; during rest it skips the remaining rest and opens the next preparation countdown. Each press advances one stage, so holding Space does not skip multiple stages. Saving still finishes before progression. Recorded demo trials retain the actual completed cycle count and store `demo_cycle_count_skipped: true` for skipped counting; skips never fabricate 20 completed rotations. Angle tests require the researcher's **Finish angle test** button in both modes; Space during the test does not accept or bypass it. In live/formal mode, Space can skip rest only; preparation still lasts five seconds and trials still require all 20 cycles.
 
@@ -310,25 +316,63 @@ Publishers and recorders started in separate terminals remain independent proces
 
 The trial selector follows [Trials_lookup.csv](docs/user_study_docs/Trials_lookup.csv): 40 measured trials and 8 practice trials, covering 50 mm and 80 mm objects. Measured references retain the lookup's `00`–`39` numbering; practice references are `P00`–`P07`. Each task/diameter group has five measured repetitions, displayed as `Task 1/5` through `Task 5/5`.
 
-For each user's Roll, Pitch, and Yaw task at each object diameter, the sequence is **practice → existing rest → angle test → five measured trials**. Practice defaults to ±20° for the 50 mm object and ±10° for the 80 mm object; the researcher can adjust these practice targets. Starting the first measured rotation trial without a valid range measurement opens an angle test after the preparation countdown. The participant starts at neutral and rotates to their maximum in both task directions. The researcher clicks **Finish angle test** after observing both directions. The symmetric measured-trial target is `min(positive maximum, magnitude of negative maximum)`; for example, +42° and −35° produce targets of ±35°. The test uses the same signed integration about the moving object task axis as cycle counting.
+For each user's Roll, Pitch, and Yaw task at each object diameter, the sequence is **practice → existing rest → angle test → five measured trials**. Practice defaults to ±20° for the 50 mm object and ±10° for the 80 mm object; the researcher can adjust these practice targets. Starting the first measured rotation trial without a valid range measurement opens an angle test after the preparation countdown. The participant starts at neutral and rotates to their maximum in both task directions. The researcher clicks **Finish angle test** after observing both directions. The symmetric measured-trial target is `min(positive maximum, magnitude of negative maximum, configured target cap for the object diameter)`. The cap comes from `PRACTICE_TARGETS_DEG` in `gui_config.py`: currently 20° for 50 mm and 10° for 80 mm. For a 50 mm object, limits of −50° and +60° therefore produce a target of ±20°; limits of −12° and +60° produce ±12°. Both the selected target and measured directions must extend beyond the neutral band. The test uses the same signed integration about the moving object task axis as cycle counting.
 
-Once the angle test finishes and its data has saved, the participant returns to neutral and presses **Space** or the researcher selects **Start trial** to begin the first measured trial's preparation countdown. The accepted target is reused across all five measured repetitions for that same user, diameter, and task during the current GUI run. Selecting a later measured repetition directly still requires a successful angle test for its group. Changing the user, object diameter, or rotation task requires the corresponding group's measurement. A fresh GUI run requires new measurements. Finger gaiting (`G`) keeps its manual-count workflow and requires no rotation angle test.
+Once the angle test finishes, the participant returns to neutral and presses **Space** or the researcher selects **Start trial** to begin the first measured trial's preparation countdown. The accepted range and target remain in memory and are reused across all five measured repetitions for that same user, diameter, and task during the current GUI run. Selecting a later measured repetition directly still requires a successful angle test for its group. Changing the user, object diameter, or rotation task requires the corresponding group's measurement. A fresh GUI run requires new measurements. Finger gaiting (`G`) keeps its manual-count workflow and requires no rotation angle test.
 
-A tracking gap or invalid/discontinuous orientation history invalidates the angle test; repeat it from neutral. Finishing before both directions have been measured, cancelling the test, or failing to save it also leaves measured trials unavailable until a successful test completes. The test is stored separately from trial recordings, and its successful result is copied into each measured trial's metadata. Demo preview runs keep the same workflow without creating calibration files or trial files.
+A tracking gap or invalid/discontinuous orientation history invalidates the angle test; repeat it from neutral. Finishing before both directions have been measured or cancelling the test also leaves measured trials unavailable until a successful test completes. Rotation calibration is **measurement only** in live and demo modes: it creates no participant/session folders, `RotationCalibration` directories, CSV files, or standalone metadata/bias files. Its accepted range is copied into each subsequent measured trial's metadata. Demo preview keeps the same workflow without creating trial files.
 
 The participant window has a white background and displays trial/task information, overall progress, the object mesh, and the target axis. It omits the STL caption, individual rotation-phase instructions, and the five-step sequence strip. The selected 50 mm or 80 mm mesh follows sensor 4 orientation relative to a captured baseline, converted using the configured sensor-to-object mounting relationship. Roll, pitch, and yaw always use the object's moving X, Y, and Z axes respectively. The target axis follows the object as the participant adjusts their wrist.
 
 With the participant window focused, press **Space** to start the selected trial or its required angle test. After completing 20 cycles and saving the data, the participant automatically enters a rest period. In either mode, press **Space** during rest to skip its remainder and enter the next preparation countdown. When rest finishes naturally, press **Space** when ready to proceed. The participant display shows a **five-second circular countdown** before each start; it captures a fresh orientation baseline when the countdown ends. The advisor's Start button uses the same countdown and can cancel it. In live mode, Space is ignored during preparation, recording, and saving; holding Space does not submit repeated requests. Early stops and save errors require the researcher to select or restart a trial. After the last trial, the participant sees a completion message.
 
-Rest durations come from [Rest_Time.py](docs/user_study_docs/Rest_Time.py), whose values are in **minutes**. The current settings are 60 seconds between trials, 120 seconds between tasks, and 300 seconds between objects. Only one duration applies at a boundary: changing objects takes priority over changing tasks, then ordinary trial rest. Practice-to-measured transitions within the same task/object use the ordinary trial rest. Both preparation and rest use the same circular display, with only the integer remaining seconds in its center. No elapsed / total time appears below the ring. Rest finishes on `0` with a Space prompt. The first trial and the end of the study have no rest period. Advisor trial-start/navigation controls wait until rest finishes or the participant skips it with Space; Ctrl+C still saves and closes normally.
+Rest durations come from [gui_config.py](docs/user_study_docs/gui_config.py), whose rest values are in **minutes**. The current settings are 60 seconds between trials, 120 seconds between tasks, and 300 seconds between objects. Only one duration applies at a boundary: changing objects takes priority over changing tasks, then ordinary trial rest. Practice-to-measured transitions within the same task/object use the ordinary trial rest. Both preparation and rest use the same circular display, with only the integer remaining seconds in its center. No elapsed / total time appears below the ring. Rest finishes on `0` with a Space prompt. The first trial and the end of the study have no rest period. Advisor trial-start/navigation controls wait until rest finishes or the participant skips it with Space; Ctrl+C still saves and closes normally.
 
-Edit the minute values and restart the GUI to change rest durations, or use `--rest-config PATH` with an alternative configuration containing `trials`, `tasks`, and `objects`. A zero value omits that rest; fractional seconds round up to whole seconds. Each session's metadata records the loaded rest configuration and durations.
+Edit the minute values and restart the GUI to change rest durations, or use `--gui-config PATH` with an alternative configuration. The former `--rest-config` option remains an alias. A zero value omits that rest; fractional seconds round up to whole seconds. Each session's metadata records the loaded configuration and durations.
 
 Counting requires a complete rotation cycle: **neutral → negative target → neutral → positive target → neutral**. These zones use the signed sum of consecutive rotations about the moving task axis. Reaching a target or passing through the neutral band advances the sequence immediately; no position requires a hold. Neutral defaults to ±5°, and crossing it between two adjacent valid angle samples also counts even if neither sample lands inside the band. Transitions follow their order along that sampled movement, so a fast neutral crossing can reach the next target in the same update. Measured rotation trials use the group's accepted angle-test target; the researcher can adjust the neutral band. The advisor no longer has a Hold setting. The trial stops automatically at 20 cycles; stopping early also saves the recorded data. Tracking interruptions discard an unfinished cycle while retaining completed cycles; the first valid recovered pose establishes a new zero and starts a fresh sequence. Crossings are not inferred across tracking interruptions. The `G` / finger-gating task currently uses the researcher's manual `+1` count pending a defined automatic counting rule.
 
 For example, `80R0` means the 80 mm object, Roll, repetition 0; it is displayed as `Task 1/5`. Both windows start in normal windowed mode. F11 toggles fullscreen in the focused window; Escape exits fullscreen. Move the participant window to its own monitor if needed. Both windows scale their fonts independently with their window size. The digital twin uses the same additional **1.30× uniform display scale** for the 50 mm and 80 mm models, including their reference axes. This display enlargement preserves model proportions and the original rotation origin. Restoring the window size restores its font sizes.
 
-The advisor's three charts show Thumb, Index, and Middle, each with six signed bars and separate force/torque scales. By default, starting a trial requires fresh sensor-4 tracking and all three six-component F/T streams. Interrupted or missing F/T data and recorder queue overflows are flagged for review; stale bars are not presented as current measurements.
+The advisor's three charts show Thumb, Index, and Middle, each with three horizontal finger-force bars labeled Fx, Fy and Fz. Bar length represents absolute magnitude on a fixed **0-to-limit** scale, such as `0-10`: **red means positive**, **blue means negative**, and zero is neutral. All three charts share `FORCE_LIMIT_N` (in N) from `gui_config.py`. Values beyond the limit fill the available bar width while numeric labels and recorded samples retain their actual signed values. Raw torque remains available in the waveforms with its separate `TORQUE_LIMIT_NMM` limit. Starting a trial requires fresh sensor-4 tracking and, by default, all three finger-force streams. Interrupted or missing data and recorder queue overflows are flagged for review; stale bars are not presented as current measurements.
+
+The advisor also shows **30-second sliding force/torque waveforms below the bar
+charts**. Drag the divider to adjust the two panels' heights. Smaller advisor
+windows scroll vertically to keep the plots readable and the controls reachable. Click
+**Visualization option** in the waveform panel to select signals. The chooser
+has **Thumb**, **Index**, and **Middle** sections; each contains **Raw** and
+**Finger transformed** groups. Raw offers Fx, Fy, Fz, Tx, Ty and Tz; Finger
+transformed offers Fx, Fy and Fz only. Select at most **three signals in total** across all fingers, Raw,
+and Finger transformed groups. At the limit, unchecked signals are disabled
+until one selected signal is cleared. **Clear all** resets the selection.
+Raw uses the ATI-calibrated, uncorrected acquisition topics in sensor
+axes; Finger transformed uses the central processor's bias-corrected three-axis
+finger-force topics. No signals are selected at startup; choose them in
+**Visualization option**. Force and torque use separate signed axes and units.
+Their fixed ranges are `-FORCE_LIMIT_N` to `+FORCE_LIMIT_N` and
+`-TORQUE_LIMIT_NMM` to `+TORQUE_LIMIT_NMM`, using the shared display limits in
+`gui_config.py`. Values outside these ranges are clipped in the plot without
+changing the samples. Trace colors and the legend identify the selected signals.
+
+The chooser's **Apply force bias to Raw** option starts unchecked and does not
+count toward the three-signal limit. It subtracts
+the central processor's active six-component sensor offsets from Raw waveforms
+for all three fingers. First unload the sensors and complete **Force bias** in
+the advisor. Missing or stale bias status shows **Waiting for Force bias**
+instead of uncorrected traces while this option is enabled. The current offsets
+apply to the whole displayed history. This option affects only Raw waveform
+display: finger-transformed signals are already corrected, and original Raw
+CSV data and source timestamps stay unchanged.
+
+The waveform horizontal axis runs from **0 to 30 seconds**, with the oldest
+window boundary at 0 and the newest data at 30. The window follows the GUI
+computer's monotonic receipt time and
+retains all valid raw/transformed callbacks for the latest 30 seconds, including
+while idle or while a signal is unchecked. Selecting a signal can therefore
+display its recent history immediately. Plot redraws are limited to 5 Hz and
+reduce drawn points while preserving peaks; CSV recording still receives the
+full samples and original source timestamps. Demo mode provides the same
+visualization controls without hardware. No additional launch script is needed.
 
 `utils/object_meshes/` contains only the two final colored models used by the GUI: `50mm.glb` and `80mm.glb`. They retain the six material colors and eleven parts from the original Onshape exports in `docs/mesh_sources/`. Geometry preparation simplifies each part/material region independently and checks topology, material assignments, scene origin, and physical bounds before installing the result. To regenerate either final model:
 
@@ -348,11 +392,48 @@ GUI configuration options:
 | `--demo` | Generate simulated samples; default save root is `User_Study_Data/demo/` |
 | `--data-root` | Override the save root; live mode defaults to repository `User_Study_Data/` |
 | `--protocol` | Override the trial lookup CSV |
-| `--rest-config` | Rest_Time.py-style configuration; values are minutes |
+| `--gui-config` | Literal GUI configuration; defaults to `docs/user_study_docs/gui_config.py` |
+| `--rest-config` | Compatibility alias for `--gui-config` |
 | `--mesh-dir` | Directory containing prepared 50 mm and 80 mm GLB models; legacy STL is supported |
 | `--timezone` | Time zone used for session and trial folder timestamps |
 
-Practice targets and the sensor-4 mounting rotation are configured in [Rest_Time.py](docs/user_study_docs/Rest_Time.py), alongside the rest durations. Edit `PRACTICE_TARGETS_DEG = {50: 20, 80: 10}` to set the practice targets in degrees by object diameter in millimetres. Edit the 3×3 `SENSOR4_FROM_OBJECT` list to set `sensor4 T_object` for both object sizes and both live/demo modes. The file accepts literal values; the matrix uses `0.8660254037844386` for `sqrt(3)/2`. Restart the GUI after editing. The `--rest-config` option selects an alternative file with all five settings. Session metadata records the loaded targets and matrix; each trial records its actual target and matrix. For three-component vectors, `v_sensor4 = T @ v_object`, with the default:
+Rest durations, acquisition rates, practice targets, sensor-4 mounting rotation,
+TF wait tolerance, and advisor chart limits are configured in
+[gui_config.py](docs/user_study_docs/gui_config.py). For example, acquisition, timing and chart
+settings can be written as:
+
+```python
+NIDAQ_SAMPLE_RATE_HZ = 350.0
+LABJACK_SAMPLE_RATE_HZ = 350.0
+TF_WAIT_TOLERANCE_MS = 500.0
+FORCE_LIMIT_N = 10.0
+TORQUE_LIMIT_NMM = 100.0
+```
+
+Each chart limit is a finite positive number. A force limit of `10.0` displays
+both +5 N and −5 N as half-length bars, colored red and blue respectively.
+Restart the GUI to apply chart or study-setting changes.
+Restart the NI-DAQ or LabJack publisher to apply its changed sampling/publication
+rate. Each acquisition computer reads its own repository copy of `gui_config.py`.
+Restart `ATI_processing_node` to apply a changed TF tolerance. Its default is
+read from the repository's `gui_config.py`; `--gui-config PATH` selects an
+alternative file for the GUI only. Existing configuration files with the five
+original rest/target/mounting settings remain supported; missing timing/chart
+keys use 500 ms, a 10 N force limit and a 100 N·mm torque limit; missing
+acquisition-rate keys use 350 Hz for each device. Session metadata records the
+loaded scalar limits, horizontal magnitude display and sign-color mapping,
+alongside the configuration path.
+
+Edit `PRACTICE_TARGETS_DEG = {50: 20, 80: 10}` to set practice targets and the upper
+bounds for measured-trial targets, in degrees by object diameter in millimetres.
+The accepted measured target uses the smaller of the two directional limits and
+that diameter's configured bound; the recorded directional maxima retain their
+actual values. Edit the 3×3 `SENSOR4_FROM_OBJECT` list to set
+`sensor4 T_object` for both object sizes and both live/demo modes. The file accepts
+literal values; the matrix uses `0.8660254037844386` for `sqrt(3)/2`. Session
+metadata records the loaded targets and matrix; each trial records its actual
+target and matrix. For three-component vectors, `v_sensor4 = T @ v_object`, with
+the default:
 
 ```text
 T = [[-0.5,      sqrt(3)/2,  0],
@@ -385,8 +466,6 @@ User_Study_Data/
     │   ├── Roll/
     │   │   ├── Archive/
     │   │   │   └── Trial1_20261104_170501_123456/
-    │   │   ├── RotationCalibration/
-    │   │   │   └── 20261104_170000_123456/
     │   │   ├── Practice_20261104_170300_123456/
     │   │   └── Trial1_20261104_171501_123456/
     │   │       ├── thumb.csv
@@ -419,21 +498,63 @@ names. Existing tracked practice files are removed from the index only; their
 local recordings remain intact. Measured trials remain eligible for tracking.
 Demo recordings under `User_Study_Data/demo/` are also ignored.
 
-Angle-test folders are reserved independently under each size/task's `RotationCalibration/<timestamp>`; repeated attempts remain in their original unique locations. They contain the same sensor and progress CSV streams as trial recordings. Their `trial_metadata.json` has `recording_kind: "rotation_calibration"`, `target_cycles: null`, `target_deg: null`, and the observed range and continuity. Normal test results are `calibration_completed`, `calibration_failed`, and `calibration_cancelled`; shutdowns retain their interruption reason. A successful `rotation_calibration` record stores the positive and negative maxima, selected symmetric target, selection rule, user/diameter/task, object-frame method, timestamps, and recording path. Each measured trial copies that record into its own `rotation_calibration` field alongside its actual target angle. Calibration samples therefore remain separate from the 20-cycle trial data.
+Rotation calibration writes no separate data. Each measured trial's
+`trial_metadata.json` includes its own `rotation_calibration` snapshot with the
+observed `measured_range_deg` (`[negative minimum, positive maximum]`), selected
+`target_range_deg` (`[-target, +target]`), directional maxima, configured cap,
+selection rule, user/diameter/task and measurement timestamps. For example,
+measuring -50° to +60° with a 20° cap produces:
 
-Each finger CSV contains `source_timestamp_sec, Fx, Fy, Fz, Tx, Ty, Tz`, with force in N and torque in N·mm. The matching `thumb_raw_force.csv`, `index_raw_force.csv`, and `middle_raw_force.csv` now subscribe directly to `/ERIE_Manipulation/acquisition/wrench_sN_uncorrected`. They save ATI factory-calibrated force/torque in each ATI sensor's own axes, with **no bias subtraction and no coordinate transformation**. The timestamp remains the acquisition-host Unix read-completion time. The separate `thumb.csv`, `index.csv`, and `middle.csv` continue to store bias-corrected finger-frame wrenches.
+```json
+{
+  "rotation_calibration": {
+    "measured_range_deg": [-50.0, 60.0],
+    "target_range_deg": [-20.0, 20.0],
+    "target_deg": 20.0,
+    "data_recorded": false,
+    "recording_path": null
+  }
+}
+```
 
-At the start of each trial or angle test, after the countdown, `force_bias.json` records one immutable copy of the active processor's three six-axis bias vectors, calibration metadata, processor identity, bias generation, component order and units. The same snapshot is included under `force_bias` in `trial_metadata.json`. Bias vectors use sensor keys `"1"` (thumb/NI-DAQ), `"2"` (middle/NI-DAQ), and `"3"` (index/LabJack), each ordered `[Fx, Fy, Fz, Tx, Ty, Tz]`. Subsequent force-bias operations do not replace an earlier trial's snapshot. A bias change during recording flags that trial for review. Offline ATI-axis correction is `corrected_FT = saved_raw_FT - trial_bias` when the trial used that calibration throughout.
+`data_recorded: false` describes the calibration measurement itself; the measured
+trial still saves its normal CSVs and metadata. Practice precedes calibration and
+has no measured range yet; finger gaiting has no rotation calibration. Existing
+`RotationCalibration` folders and recordings are preserved.
 
-New trial metadata marks the raw data using `raw_force_schema.schema_version: 2`, `raw_bias_applied: false`, `raw_axes` and `raw_topics`. Earlier GUI recordings used bias-corrected raw files; their data and metadata are preserved. Demo recordings explicitly identify the bias snapshot as simulated, and demo preview continues to write no files.
+The finger CSVs `thumb.csv`, `index.csv` and `middle.csv` contain
+`source_timestamp_sec, Fx, Fy, Fz`, storing bias-corrected finger-frame force in N.
+The matching `thumb_raw_force.csv`, `index_raw_force.csv` and
+`middle_raw_force.csv` contain `source_timestamp_sec, Fx, Fy, Fz, Tx, Ty, Tz`.
+They subscribe directly to `/ERIE_Manipulation/acquisition/wrench_sN_uncorrected`
+and save ATI factory-calibrated force/torque in each sensor's own axes, with
+**no bias subtraction and no coordinate transformation**. Raw torque is in N·mm.
+All timestamps remain acquisition-host Unix read-completion times. Existing
+seven-column finger recordings are preserved; new finger-force files omit
+torque columns rather than filling them with zeros.
+
+At the start of each saved trial, after the countdown, `force_bias.json` records one immutable copy of the active processor's three six-axis bias vectors, calibration metadata, processor identity, bias generation, component order and units. The same snapshot is included under `force_bias` in `trial_metadata.json`. Bias vectors use sensor keys `"1"` (thumb/NI-DAQ), `"2"` (middle/NI-DAQ), and `"3"` (index/LabJack), each ordered `[Fx, Fy, Fz, Tx, Ty, Tz]`. Subsequent force-bias operations do not replace an earlier trial's snapshot. A bias change during recording flags that trial for review. Offline ATI-axis correction is `corrected_FT = saved_raw_FT - trial_bias` when the trial used that calibration throughout.
+
+New trial metadata describes the four-column finger data in `finger_force_schema`
+and marks Raw data using `raw_force_schema.schema_version: 2`,
+`raw_bias_applied: false`, `raw_axes` and `raw_topics`. Earlier recordings,
+including their original torque columns or bias-corrected Raw files, are
+preserved. Demo recordings identify the bias snapshot as simulated, and demo
+preview continues to write no files.
 
 `object_orientation.csv` stores sensor-4 timestamps and `qx, qy, qz, qw`; `rotation_progress.csv` stores timestamps, elapsed time, signed angle, completed cycles, and counter phase. Session/trial JSON files store the experiment settings and recording details.
 
 `rotation_axis_error.csv` stores `source_timestamp_sec, elapsed_sec, step_rotation_deg, step_angle_deg, accumulated_angle_deg, axis_x, axis_y, axis_z, axis_error_deg, continuous, status`. The axis components are expressed in the previous sample's object frame. Unavailable values are blank; `continuous` indicates whether the accumulated angle has an uninterrupted history for the trial. The file contains only its header for finger-gaiting trials.
 
-For six-component finger-frame data, the central processor provides `/ERIE_Manipulation/force/wrench_s1_finger1` (thumb), `wrench_s3_finger3` (index), and `wrench_s2_finger2` (middle), all under the same `/ERIE_Manipulation/force/` prefix. The existing `force_sN_fingerN` force-only topics remain available. Both force and torque are rotated into the finger-frame axes, but torque retains the ATI measurement origin: no `r × F` moment-transfer term is applied. These torque values therefore do not represent moments transferred to the finger sensor or object origin.
+Finger-frame data uses `/ERIE_Manipulation/force/force_s1_finger1` (thumb),
+`force_s3_finger3` (index), and `force_s2_finger2` (middle), under the same
+`/ERIE_Manipulation/force/` prefix. Torque is retained only in Raw sensor-axis
+data. A coordinate rotation can also rotate torque without translation; this
+pipeline deliberately outputs only finger force. No `r × F` moment transfer is
+performed.
 
-Calibration and visualization nodes are available as modules:
+Optional calibration and visualization nodes are available as modules; the GUI
+does not require these processes:
 
 ```bash
 python -m utils.calibration.rotational_error_node
@@ -463,7 +584,17 @@ data/user_{number}/{diameter}mm/{task}/trial_{number}/
 | [Raw sensor force/torque](utils/recording/force_raw_csv_recorder.py) | `thumb_raw_force.csv`, `middle_raw_force.csv`, `index_raw_force.csv` | `source_timestamp_sec, Fx, Fy, Fz, Tx, Ty, Tz` |
 | [Object-origin pipeline](utils/recording/object_origin_csv_recorder.py) | `object_origin_thumb_force.csv`, `object_origin_middle_force.csv`, `object_origin_index_force.csv` | `source_timestamp_sec, Fx, Fy, Fz` |
 
-Here, raw sensor values have already been calibrated and bias-corrected. The object-origin pipeline currently publishes contact-frame force after the object-origin rotation and contact-position calculation; its existing topic and file names are preserved. The GUI's separate session layout and seven-column force/torque format are described above.
+Raw sensor values are ATI-calibrated and uncorrected. The optional object-origin
+pipeline applies the active central bias before its object rotation and
+contact-position calculation; its existing output topic and file names are
+preserved. GUI and standalone recording now use the same four-column finger-force
+and seven-column Raw force/torque formats, with their separate storage layouts.
+
+The standalone Raw recorder writes `raw_force_schema.json` beside its CSVs.
+Appending requires the same recorded schema, CSV headers and source topics.
+Existing nonempty Raw CSVs without this marker, including older bias-corrected
+recordings, require a new trial folder so corrected and uncorrected samples are
+not mixed. Existing data is never converted or overwritten automatically.
 
 Legacy datasets may use `data/{rotation axis}/test_{number}/` with `raw_data.csv` and `transformed_data.csv`. Those older combined files contain three consecutive sensor blocks `[Fx, Fy, Fz, Tx, Ty, Tz]`; the transformed torque columns are zero placeholders. The current recorders use the per-finger formats shown above.
 

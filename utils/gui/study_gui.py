@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime
 import json
@@ -20,8 +21,10 @@ import numpy as np
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from utils.paths import PROJECT_ROOT, STUDY_DATA_DIR
+from utils.paths import GUI_CONFIG_FILE, PROJECT_ROOT, STUDY_DATA_DIR
 from utils.gui.mesh_view import MeshView, mesh_asset_path
+from utils.gui.advisor_layout import AdvisorBody
+from utils.gui.force_visualization import ForceWaveformView
 from utils.gui.responsive import ResponsiveFonts
 from utils.gui.rest import RestCountdown, load_study_settings
 from utils.gui.rest_view import RestCountdownView
@@ -31,8 +34,8 @@ from utils.gui.study_model import (
     relative_rotation,
 )
 from utils.gui.study_io import (
-    FINGERS, SENSORS, WRENCH_TOPICS, RAW_TOPICS, STALE_SEC, ROSBridge, TrialWriter, PreviewWriter,
-    create_session, create_trial_directory, create_calibration_directory, validate_user, utc_now,
+    FINGERS, SENSORS, FORCE_TOPICS, RAW_TOPICS, STALE_SEC, ROSBridge, TrialWriter, PreviewWriter,
+    create_session, create_trial_directory, validate_user, utc_now,
     force_bias_record, unique_directory,
 )
 
@@ -55,54 +58,60 @@ def report(message, error=False):
 
 
 class ForceChart(tk.Canvas):
-    """Six signed bars, with separate physical scales for N and N·mm."""
-    def __init__(self, master):
-        super().__init__(master, background="white", highlightthickness=0, height=236, width=280)
-        self.scales = [10.0, 100.0]
+    """Three horizontal finger-force magnitude bars with sign colors."""
+
+    POSITIVE_COLOR = "#DC2626"
+    NEGATIVE_COLOR = "#2563EB"
+    ZERO_COLOR = "#94A3B8"
+
+    def __init__(self, master, *, force_limit_n=10.0):
+        super().__init__(master, background="white", highlightthickness=0, height=110, width=280)
+        self.force_limit_n = float(force_limit_n)
         self.font_scale = 1.0
         self.bind("<Configure>", lambda _: self.draw(self.last))
         self.last = None
 
     def set_font_scale(self, scale):
         self.font_scale = scale
+        self.configure(height=round(110 * scale))
         self.draw(self.last)
 
     def draw(self, values):
         self.last = values
         self.delete("all")
         w, h = self.winfo_width(), self.winfo_height()
-        if w < 80 or h < 80:
+        if w < 80 or h < 65:
             return
         s = self.font_scale
-        top, bottom = 48 * s, h - 56 * s
-        baseline, half = (top + bottom) / 2, max(4, (bottom - top) / 2)
+        heading_height = 25 * s
+        row_height = max(8, (h - heading_height - 5 * s) / 3)
+        text_scale = min(s, max(.7, row_height / 14))
         def font(size, bold=False):
-            return ("DejaVu Sans", max(7, round(size * s)), "bold" if bold else "normal")
-        colors = ("#E4826F", "#44A99B", "#648CD2")
-        for group, unit in enumerate(("FORCE · N", "TORQUE · N·mm")):
-            left, right = group * w / 2 + 12, (group + 1) * w / 2 - 12
-            current = None if values is None else values[group * 3:group * 3 + 3]
-            finite = [] if current is None else [abs(v) for v in current if v is not None]
-            if finite and max(finite) > self.scales[group]:
-                self.scales[group] = 10 ** math.ceil(math.log10(max(finite)))
-            scale = self.scales[group]
-            self.create_text((left + right) / 2, 18 * s, text=unit, fill=MUTED, font=font(9, True))
-            self.create_text(left, 39 * s, text=f"±{scale:g}", anchor="w", fill=MUTED, font=font(8))
-            for level in (-1, 0, 1):
-                line_y = baseline + level * half
-                self.create_line(left, line_y, right, line_y, fill="#DCE4EB" if level == 0 else "#EDF1F5")
-            for axis in range(3):
-                x = left + (axis + .5) * (right - left) / 3
-                value = None if current is None else current[axis]
-                if value is not None:
-                    y = baseline - value / scale * half
-                    self.create_rectangle(x - 12 * s, min(y, baseline), x + 12 * s, max(y, baseline) + 1,
-                                          fill=colors[axis], outline="")
-                self.create_text(x, h - 36 * s, text=("F" if group == 0 else "T") + "xyz"[axis],
-                                 fill=INK, font=font(10, True))
-                self.create_text(x, h - 16 * s, text="—" if value is None else f"{value:+.2f}",
-                                 fill=MUTED, font=font(9))
-        self.create_line(w / 2, 10, w / 2, h - 8, fill="#E5EBF0")
+            return ("DejaVu Sans", max(7, round(size * text_scale)), "bold" if bold else "normal")
+        bar_left, bar_right = 43 * s, max(43 * s + 8, w - 66 * s)
+        self.create_text(12 * s, 10 * s, text="FORCE · N", anchor="w", fill=MUTED, font=font(9, True))
+        self.create_text(w - 12 * s, 10 * s, text=f"0-{self.force_limit_n:g}", anchor="e",
+                         fill=MUTED, font=font(8))
+        half_bar_height = max(2, min(7 * s, row_height * .3))
+        for axis in range(3):
+            y = heading_height + (axis + .5) * row_height
+            self.create_rectangle(bar_left, y - half_bar_height, bar_right, y + half_bar_height,
+                                  fill="#EDF1F5", outline="", tags="bar-track")
+            value = None if values is None else values[axis]
+            if value is not None and not math.isfinite(value):
+                value = None
+            color = self.ZERO_COLOR
+            if value is not None:
+                color = (self.POSITIVE_COLOR if value > 0 else
+                         self.NEGATIVE_COLOR if value < 0 else self.ZERO_COLOR)
+                fraction = min(1.0, abs(value) / self.force_limit_n)
+                self.create_rectangle(bar_left, y - half_bar_height,
+                                      bar_left + fraction * (bar_right - bar_left), y + half_bar_height,
+                                      fill=color, outline="", tags="magnitude-bar")
+            self.create_text(12 * s, y, text="F" + "xyz"[axis],
+                             anchor="w", fill=INK, font=font(9, True))
+            self.create_text(w - 12 * s, y, text="—" if value is None else f"{value:+.2f}",
+                             anchor="e", fill=MUTED if value is None else color, font=font(9))
 
 
 class StudyApplication:
@@ -115,8 +124,20 @@ class StudyApplication:
         self.trials = load_trials(args.protocol)
         settings = load_study_settings(args.rest_config)
         self.rest_times = settings.rest_times
+        self.force_limit_n = settings.force_limit_n
+        self.torque_limit_nmm = settings.torque_limit_nmm
+        self.gui_config_metadata = {
+            "gui_config_file": str(args.rest_config),
+            "configured_tf_wait_tolerance_ms": settings.tf_wait_tolerance_ms,
+            "advisor_chart_limits": {
+                "force_limit_n": self.force_limit_n,
+                "torque_limit_nmm": self.torque_limit_nmm,
+                "range_mode": "absolute_magnitude", "orientation": "horizontal",
+                "positive_color": "red", "negative_color": "blue",
+            },
+        }
         self.practice_targets_deg = dict(settings.practice_targets_deg)
-        missing_sizes = {trial.diameter_mm for trial in self.trials if trial.practice and trial.axis} - self.practice_targets_deg.keys()
+        missing_sizes = {trial.diameter_mm for trial in self.trials if trial.axis} - self.practice_targets_deg.keys()
         if missing_sizes:
             raise ValueError(f"Missing PRACTICE_TARGETS_DEG in {args.rest_config} for diameters: "
                              + ", ".join(str(size) for size in sorted(missing_sizes)))
@@ -155,6 +176,8 @@ class StudyApplication:
         self.ft_stale = {finger: False for finger in FINGERS}
         self.quality_issues = []
         self.events = queue.Queue()
+        self.waveform_view = None
+        self._waveform_last_refresh = None
         self.user = tk.StringVar(value="001")
         self.user.trace_add("write", lambda *_: self.refresh_identity())
         self.selection = tk.StringVar()
@@ -175,7 +198,7 @@ class StudyApplication:
         self._build_researcher()
         self._build_participant()
         self._select_trial(0)
-        self.advisor_fonts = ResponsiveFonts(root, base_size=(1240, 900), on_scale=self._scale_advisor)
+        self.advisor_fonts = ResponsiveFonts(root, base_size=(1240, 1080), on_scale=self._scale_advisor)
         self.participant_fonts = ResponsiveFonts(self.participant, base_size=(1000, 850), on_scale=self._scale_participant)
         for window in (root, self.participant):
             window.bind("<F11>", lambda _, w=window: w.attributes("-fullscreen", not w.attributes("-fullscreen")))
@@ -197,10 +220,20 @@ class StudyApplication:
         return tk.Label(parent, text=text, textvariable=variable, font=("DejaVu Sans", size, "bold" if bold else "normal"),
                         fg=color, bg=bg, **kwargs)
 
+    def _create_force_chart(self, parent):
+        """Give every finger chart the same configured physical display ranges."""
+        return ForceChart(parent, force_limit_n=self.force_limit_n)
+
+    def _create_force_waveform_view(self, parent):
+        """Share the bar charts' physical limits with signed waveforms."""
+        return ForceWaveformView(parent, force_limit_n=self.force_limit_n,
+                                 torque_limit_nmm=self.torque_limit_nmm)
+
     def _build_researcher(self):
         r = self.root
         r.title("ERIE · Study advisor" + (" · DEMO" if self.args.demo else ""))
-        r.geometry("1240x900+30+30")
+        advisor_height = min(1080, max(790, r.winfo_screenheight() - 90))
+        r.geometry(f"1240x{advisor_height}+30+30")
         r.minsize(1060, 790)
         r.configure(bg=LIGHT)
         style = ttk.Style(r)
@@ -216,10 +249,12 @@ class StudyApplication:
         self.label(header, "ERIE  /  MANIPULATION STUDY", size=15, bold=True, color="white", bg=NAVY).pack(side="left")
         self.label(header, "ADVISOR" + ("   •   DEMO" if self.args.demo else "   •   LIVE"), size=10,
                    color="#88D8CA", bg=NAVY).pack(side="right")
-        body = tk.Frame(r, bg=LIGHT, padx=24, pady=12)
-        body.pack(fill="both", expand=True)
+        self.advisor_body = AdvisorBody(r, bg=LIGHT)
+        self.advisor_body.pack(fill="both", expand=True)
+        body = self.advisor_body.body
+        body.configure(bg=LIGHT, padx=24, pady=12)
         body.columnconfigure(0, weight=1)
-        body.rowconfigure(3, weight=1)
+        body.rowconfigure(3, weight=1, minsize=420)
         setup_panel = tk.Frame(body, bg=LIGHT)
         setup_panel.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         setup = tk.Frame(setup_panel, bg=LIGHT)
@@ -257,23 +292,30 @@ class StudyApplication:
             frame.grid(row=pos // 3, column=pos % 3, sticky="ew", pady=(0, 6) if pos < 3 else 0)
             self.label(frame, title, size=8, color=MUTED).pack(anchor="w")
             self.label(frame, variable=self.info_vars[key], size=14, bold=True).pack(anchor="w", pady=(3, 0))
-        self.label(body, "REALTIME FINGER FORCE / TORQUE", bg=LIGHT, size=10, bold=True).grid(row=2, column=0, sticky="w", pady=(1, 6))
-        charts = tk.Frame(body, bg=LIGHT)
-        charts.grid(row=3, column=0, sticky="nsew")
+        self.label(body, "REALTIME FINGER FORCE", bg=LIGHT, size=10, bold=True).grid(row=2, column=0, sticky="w", pady=(1, 6))
+        self.signal_panes = ttk.Panedwindow(body, orient=tk.VERTICAL)
+        self.signal_panes.grid(row=3, column=0, sticky="nsew")
+        charts = tk.Frame(self.signal_panes, bg=LIGHT)
+        self.signal_panes.add(charts, weight=0)
         self.charts, self.chart_status = {}, {}
         for i, finger in enumerate(FINGERS):
             charts.columnconfigure(i, weight=1, uniform="charts")
-            card = tk.Frame(charts, bg="white", padx=12, pady=12)
+            card = tk.Frame(charts, bg="white", padx=8, pady=8)
             card.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 6, 0 if i == 2 else 6))
-            self.label(card, finger.title(), size=14, bold=True).pack(anchor="w")
-            self.label(card, f"Finger frame  ·  Sensor {SENSORS[finger]}", size=9, color=MUTED).pack(anchor="w", pady=(3, 0))
-            chart = ForceChart(card)
+            card_header = tk.Frame(card, bg="white")
+            card_header.pack(fill="x")
+            self.label(card_header, finger.title(), size=12, bold=True).pack(side="left")
+            self.label(card_header, f"Finger frame · Sensor {SENSORS[finger]}", size=8,
+                       color=MUTED).pack(side="right")
+            chart = self._create_force_chart(card)
             chart.pack(fill="both", expand=True)
             self.charts[finger] = chart
-            self.chart_status[finger] = tk.StringVar(value="Waiting for F/T")
+            self.chart_status[finger] = tk.StringVar(value="Waiting for force")
             self.label(card, variable=self.chart_status[finger], size=9, color=MUTED).pack(anchor="w")
         charts.rowconfigure(0, weight=1)
-        self.label(body, "Torque uses finger-frame axes at the ATI sensing origin. Force and torque have separate scales.",
+        self.waveform_view = self._create_force_waveform_view(self.signal_panes)
+        self.signal_panes.add(self.waveform_view, weight=1)
+        self.label(body, "Finger-force bars show magnitude; red = positive, blue = negative. Raw waveforms retain force and torque.",
                    size=9, color=MUTED, bg=LIGHT).grid(row=4, column=0, sticky="w", pady=(4, 8))
         control = tk.Frame(body, bg="white", padx=18, pady=10)
         control.grid(row=5, column=0, sticky="ew")
@@ -294,7 +336,7 @@ class StudyApplication:
             entry.pack(side="left", padx=(0, 16))
             self.setting_entries.append(entry)
         self.target_entry = self.setting_entries[0]
-        self.require_box = tk.Checkbutton(settings, text="Require all 3 F/T streams", variable=self.require_ft, bg="white",
+        self.require_box = tk.Checkbutton(settings, text="Require all 3 force streams", variable=self.require_ft, bg="white",
                                           fg=INK, activebackground="white", font=("DejaVu Sans", 9))
         self.require_box.pack(side="left")
         buttons = tk.Frame(control, bg="white")
@@ -381,6 +423,9 @@ class StudyApplication:
     def _scale_advisor(self, scale):
         for chart in self.charts.values():
             chart.set_font_scale(scale)
+        waveform_view = getattr(self, "waveform_view", None)
+        if waveform_view is not None:
+            waveform_view.set_font_scale(scale)
         width = max(300, self.root.winfo_width() - 48)
         self.folder_widget.configure(wraplength=width)
         self.notice_widget.configure(wraplength=width)
@@ -699,7 +744,7 @@ class StudyApplication:
             raise ValueError("Force bias is in progress. Keep all 3 sensors unloaded and wait before starting.")
         if not self.args.demo:
             # Every live recording must carry the actual active offsets, even
-            # when the optional finger-frame F/T requirement is unchecked.
+            # when the optional finger-frame force requirement is unchecked.
             force_bias_record(self._force_bias_snapshot(snapshot))
         now = time.monotonic()
         pose = snapshot["pose"]
@@ -710,7 +755,7 @@ class StudyApplication:
         if self.require_ft.get():
             missing = [f.title() for f, v in snapshot["fingers"].items() if v["value"] is None or now - v["arrival"] > STALE_SEC]
             if missing:
-                raise ValueError("Waiting for finger-frame F/T: " + ", ".join(missing) + ". Check the updated publishers.")
+                raise ValueError("Waiting for finger-frame force: " + ", ".join(missing) + ". Check the updated publishers.")
         return pose
 
     def _prepare_trial_start(self):
@@ -743,7 +788,9 @@ class StudyApplication:
         self._clear_rest()
         self.counter = counter
         self.calibrating = self.needs_calibration()
-        self.range_calibration = RotationRangeCalibration() if self.calibrating else None
+        self.range_calibration = (RotationRangeCalibration(
+            target_cap_deg=self.practice_targets_deg[self.trial.diameter_mm])
+            if self.calibrating else None)
         self.participant_start_error = False
         self.manual_count = 0
         self.state = "countdown"
@@ -774,8 +821,8 @@ class StudyApplication:
             # Recheck after the countdown; capture R0 from the most recent fresh TF.
             snapshot = self.bridge.snapshot()
             pose = self.preflight(snapshot)
-            # Capture once after the countdown, before creating any trial files.
-            # This archives the active calibration without requesting a new tare.
+            # Capture the current bias once without requesting another tare.
+            # Saved trials archive it; angle tests keep it only in memory.
             force_bias = self._force_bias_snapshot(snapshot)
             bias_record = ({"schema_version": 1, "captured_utc": utc_now(),
                             "demo": True, "biases": None,
@@ -783,7 +830,9 @@ class StudyApplication:
                            if self.args.demo else force_bias_record(force_bias))
             when = datetime.now(self.zone)
             user = validate_user(self.user.get())
-            recording_enabled = not self.args.demo or self.record_demo_data.get()
+            config_metadata = getattr(self, "gui_config_metadata", {"gui_config_file": str(self.args.rest_config)})
+            recording_enabled = (not self.calibrating
+                                 and (not self.args.demo or self.record_demo_data.get()))
             if recording_enabled and (self.session_path is None or self.session_user != user):
                 session_path = create_session(self.args.data_root, user, when)
                 metadata_dir = unique_directory(session_path / "SessionMetadata", f"Session_{when:%Y%m%d_%H%M%S_%f}")
@@ -791,6 +840,7 @@ class StudyApplication:
                 session = {"user_number": user, "started_local": when.isoformat(), "timezone": self.args.timezone,
                            "demo": self.args.demo, "protocol_file": str(self.args.protocol),
                            "rest_config_file": str(self.args.rest_config), "rest_seconds": asdict(self.rest_times),
+                           **config_metadata,
                            "practice_targets_deg": self.practice_targets_deg,
                            "object_to_sensor4_matrix": self.alignment.tolist(),
                            "storage_layout_version": 2, "participant_directory": session_path.name,
@@ -798,8 +848,7 @@ class StudyApplication:
                 session_metadata_path.write_text(json.dumps(session, indent=2), encoding="utf-8")
                 self.session_path, self.session_user = session_path, user
                 self.session_metadata_path = session_metadata_path
-            create_directory = create_calibration_directory if self.calibrating else create_trial_directory
-            self.trial_path = (create_directory(self.session_path, user, self.trial, when)
+            self.trial_path = (create_trial_directory(self.session_path, user, self.trial, when)
                                if recording_enabled else None)
             self.baseline = pose.quaternion
             self.axis_tracker = RotationAxisTracker(self.trial.axis) if self.trial.axis else None
@@ -821,10 +870,11 @@ class StudyApplication:
             self.start_counters = self.bridge.counters()
             self.last_pose_drops = self.start_counters["pose_drops"]
             metadata = {"user_number": user, "trial": asdict(self.trial), "started_local": when.isoformat(),
+                        **config_metadata,
                         "started_utc": self.started_utc, "timezone": self.args.timezone, "demo": self.args.demo,
                         "data_recorded": recording_enabled, "demo_cycle_count_skipped": False,
                         "recording_kind": "rotation_calibration" if self.calibrating else "trial",
-                        "rotation_calibration": (self.current_calibration() if not self.calibrating and
+                        "rotation_calibration": (deepcopy(self.current_calibration()) if not self.calibrating and
                                                  self.trial.axis and not self.trial.practice else None),
                         "target_cycles": None if self.calibrating else 20,
                         "target_deg": None if self.calibrating else self.counter.target_deg,
@@ -852,9 +902,9 @@ class StudyApplication:
                         "incremental_angle_definition": "sum of signed task-axis twist from consecutive valid poses",
                         "cycle_angle_definition": "sum of signed task-axis increments since the latest tracking reference",
                         "cycle_angle_reset_policy": "re-zero on first valid pose after a tracking interruption",
-                        "force_unit": "N", "torque_unit": "N*mm", "wrench_axes": "finger frame",
-                        "torque_origin": "ATI sensing origin; axes rotated only; no moment-arm translation",
-                        "topics": WRENCH_TOPICS, "sensor_mapping": SENSORS, "require_all_ft": self.require_ft.get(),
+                        "force_unit": "N", "raw_torque_unit": "N*mm", "force_axes": "finger frame",
+                        "transformed_components": ["Fx", "Fy", "Fz"],
+                        "topics": FORCE_TOPICS, "sensor_mapping": SENSORS, "require_all_force": self.require_ft.get(),
                         "raw_topics": RAW_TOPICS, "raw_axes": "ATI sensor frame", "raw_bias_applied": False,
                         "force_bias": bias_record,
                         "storage_layout_version": 2, "task_trial_number": self.trial.task_position,
@@ -868,7 +918,7 @@ class StudyApplication:
                 raise OSError("Timed out opening trial files.")
             if self.writer.error:
                 raise OSError(self.writer.error)
-            # Saving a baseline row also makes the quaternion reference explicit in CSV.
+            # Saved trials archive this baseline; angle tests retain no samples.
             self.writer.add("pose", None, (pose.source_timestamp, *pose.quaternion))
             self.bridge.begin(self.writer, self.trial.axis, self.counter.target_deg,
                               alignment=self.alignment, baseline=self.baseline,
@@ -878,13 +928,15 @@ class StudyApplication:
             self.rotation = np.eye(3)
             self.angle = 0.0
             self.info_vars["start"].set(when.strftime("%H:%M:%S  %Z"))
-            self.folder_label.set(str(self.trial_path) if recording_enabled else
+            self.folder_label.set("Rotation calibration · measurement only · no files are written." if
+                                  self.calibrating else str(self.trial_path) if recording_enabled else
                                   "Demo preview · data recording disabled · no files are being written.")
             self.status_label.set("ANGLE TEST" if self.calibrating else
                                   "RECORDING" if recording_enabled else "DEMO PREVIEW · NOT RECORDING")
-            self.notice.set("Measure the maximum rotation in both directions, then click Finish angle test." if
+            self.notice.set("Measure the maximum rotation in both directions, then click Finish angle test. "
+                            "The range will be included in subsequent trial metadata." if
                             self.calibrating else
-                            "Recording all incoming F/T samples. Orientation baseline reset for this trial." if
+                            "Recording all incoming raw F/T and finger-force samples. Orientation baseline reset for this trial." if
                             recording_enabled else "Demo preview started. No CSV or metadata files are written.")
             if self.calibrating:
                 self.part_trial.configure(text=f"Angle test · {TASK_NAMES[self.trial.task]} · {self.trial.diameter_mm} mm")
@@ -1046,12 +1098,12 @@ class StudyApplication:
         self.quality_issues = (["Force bias changed during recording"]
                                if getattr(self, "_force_bias_recording_changed", False) else [])
         for finger in FINGERS:
-            key = "wrench_" + finger
+            key = "force_" + finger
             if (self.ft_interruptions[finger] or self.ft_stale[finger]
                     or end_counters["gaps"][key] > self.start_counters["gaps"][key]):
-                self.quality_issues.append(f"{finger} F/T interrupted")
+                self.quality_issues.append(f"{finger} force interrupted")
             if end_counters["invalid"][key] > self.start_counters["invalid"][key]:
-                self.quality_issues.append(f"{finger} invalid F/T samples")
+                self.quality_issues.append(f"{finger} invalid force samples")
             raw_key = "raw_" + finger
             if end_counters["gaps"][raw_key] > self.start_counters["gaps"][raw_key]:
                 self.quality_issues.append(f"{finger} raw F/T interrupted")
@@ -1071,9 +1123,11 @@ class StudyApplication:
             if result == "calibration_completed":
                 try:
                     if self.writer.overflows:
-                        raise ValueError("Samples were dropped while saving. Repeat the angle test.")
+                        raise ValueError("Samples were lost during the angle test. Repeat it.")
                     calibration = self.range_calibration.result(self.counter.neutral_deg)
                     calibration.update(
+                        measured_range_deg=[-calibration["negative_max_deg"], calibration["positive_max_deg"]],
+                        target_range_deg=[-calibration["target_deg"], calibration["target_deg"]],
                         user_number=self.user.get().strip(), diameter_mm=self.trial.diameter_mm,
                         task=self.trial.task, axis=self.trial.axis,
                         rotation_frame="moving_object", started_utc=self.started_utc,
@@ -1109,8 +1163,10 @@ class StudyApplication:
                                    "acquisition_counters_end": end_counters, **calibration_extra})
         self.state = "saving"
         if update_ui:
-            self.status_label.set("SAVING" if getattr(self.writer, "recording_enabled", True) else "FINISHING PREVIEW")
-            self.notice.set("Finishing CSV writes…" if getattr(self.writer, "recording_enabled", True) else
+            self.status_label.set("FINISHING ANGLE TEST" if self.calibrating else
+                                  "SAVING" if getattr(self.writer, "recording_enabled", True) else "FINISHING PREVIEW")
+            self.notice.set("Finishing angle measurement…" if self.calibrating else
+                            "Finishing CSV writes…" if getattr(self.writer, "recording_enabled", True) else
                             "Finishing demo preview…")
             self.set_controls()
 
@@ -1124,7 +1180,7 @@ class StudyApplication:
         if self.calibrating:
             accepted = (writer.result == "calibration_completed" and not writer.error and not writer.overflows)
             if accepted:
-                self.calibrations[self.calibration_key()] = dict(writer.metadata["rotation_calibration"])
+                self.calibrations[self.calibration_key()] = deepcopy(writer.metadata["rotation_calibration"])
             self._select_trial(self.index)
             if accepted:
                 calibration = self.current_calibration()
@@ -1135,7 +1191,7 @@ class StudyApplication:
                                 "Press SPACE or Start trial when ready.")
             else:
                 self.status_label.set("ANGLE TEST · REPEAT REQUIRED")
-                error = writer.error or writer.metadata.get("calibration_error") or "Angle test cancelled or not saved."
+                error = writer.error or writer.metadata.get("calibration_error") or "Angle test cancelled or incomplete."
                 self.notice.set(f"{error} Hold at neutral and start the angle test again.")
             return
         incomplete = [f for f in FINGERS if writer.counts[f] == 0]
@@ -1154,14 +1210,14 @@ class StudyApplication:
             if writer.overflows:
                 issues.append(f"{writer.overflows} writer queue drops")
             if incomplete:
-                issues.append("empty F/T: " + ", ".join(incomplete))
+                issues.append("empty force: " + ", ".join(incomplete))
             if incomplete_raw:
                 issues.append("empty raw F/T: " + ", ".join(incomplete_raw))
             self.notice.set(f"Saved {self.count}/20 cycles. Review: " + "; ".join(issues) + ".")
         else:
             self.status_label.set("COMPLETE · SAVED" if writer.result == "completed" else
                                   "DEMO SKIPPED · SAVED" if writer.result == "demo_skipped" else "STOPPED · SAVED")
-            self.notice.set(f"Saved {self.count}/20 cycles and {sum(writer.counts.values()):,} finger F/T samples.")
+            self.notice.set(f"Saved {self.count}/20 cycles and {sum(writer.counts.values()):,} finger-force samples.")
         self.set_controls()
         self.update_progress()
         self._begin_rest()
@@ -1283,10 +1339,10 @@ class StudyApplication:
         self._update_rest(now)
         for finger, item in snapshot["fingers"].items():
             fresh = item["value"] is not None and now - item["arrival"] <= STALE_SEC
-            legacy = item["force"] is not None and now - item["force_arrival"] <= STALE_SEC
-            values = item["value"][:6] if fresh else ((*item["force"][:3], None, None, None) if legacy else None)
+            values = item["value"][:3] if fresh else None
             self.charts[finger].draw(values)
-            self.chart_status[finger].set(f"Live  ·  {item['rate']:.0f} Hz" if fresh else "Force only · torque unavailable" if legacy else "Offline · waiting for F/T")
+            self.chart_status[finger].set(f"Live  ·  {item['rate']:.0f} Hz" if fresh else "Offline · waiting for force")
+        self._refresh_waveforms(now, force_bias=snapshot.get("force_bias"))
         while not self.events.empty():
             level, message = self.events.get_nowait()
             if self.state == "ready" or level == "error":
@@ -1316,6 +1372,25 @@ class StudyApplication:
         self.update_progress()
         self.root.after(50, self.tick)
 
+    def open_visualization_options(self):
+        """Open the waveform signal chooser while the advisor remains active."""
+        view = getattr(self, "waveform_view", None)
+        if not self.closing and view is not None:
+            view.open_options()
+
+    def _refresh_waveforms(self, now, *, force_bias=None):
+        """Refresh visible history at 5 Hz without changing acquisition cadence."""
+        view = getattr(self, "waveform_view", None)
+        if self.closing or view is None or not view.winfo_ismapped():
+            return
+        last = getattr(self, "_waveform_last_refresh", None)
+        if last is not None and now - last < .2:
+            return
+        history = self.bridge.force_history_snapshot(now=now)
+        view.set_raw_bias_status(force_bias)
+        view.refresh(history, now)
+        self._waveform_last_refresh = now
+
     def close(self, reason="closed"):
         if self.closing:
             return
@@ -1331,7 +1406,7 @@ class StudyApplication:
         self.closing = True
         reason = reason or self.close_reason
         errors = []
-        report("stopping; finishing CSV and metadata writes…")
+        report("stopping; finishing the active measurement…")
         try:
             self.finish_trial(reason, update_ui=False)
         except Exception as exc:
@@ -1353,6 +1428,8 @@ class StudyApplication:
                     report(f"saved {self.writer.path}")
                     if self.writer.overflows:
                         report(f"review data; {self.writer.overflows} samples were dropped by the writer queue.", error=True)
+                elif self.writer.metadata.get("recording_kind") == "rotation_calibration":
+                    report("rotation calibration ended; no data files were written.")
                 else:
                     report("demo preview ended; no data files were written.")
         except Exception as exc:
@@ -1379,8 +1456,8 @@ def parse_args(argv=None):
     parser.add_argument("--demo", action="store_true", help="Simulate sensors; default output is User_Study_Data/demo/.")
     parser.add_argument("--data-root", type=Path, default=None)
     parser.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "docs/user_study_docs/Trials_lookup.csv")
-    parser.add_argument("--rest-config", type=Path, default=PROJECT_ROOT / "docs/user_study_docs/Rest_Time.py",
-                        help="Study settings: rest durations, practice targets, and sensor4-from-object rotation.")
+    parser.add_argument("--gui-config", "--rest-config", dest="rest_config", metavar="PATH", type=Path, default=GUI_CONFIG_FILE,
+                        help="GUI configuration: rest durations, practice targets, sensor4 rotation, TF tolerance, and chart limits.")
     parser.add_argument("--mesh-dir", type=Path, default=PROJECT_ROOT / "utils/object_meshes",
                         help="Prepared 50mm/80mm GLB models; legacy STL is also supported.")
     parser.add_argument("--timezone", default="America/New_York", help="Timezone for session and trial folder names.")
