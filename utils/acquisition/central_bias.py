@@ -123,8 +123,13 @@ class CentralBiasManager:
         if not valid:
             self.last_rejection = f"sensor{sensor}: invalid values or timestamp"
             return None
-        if abs(now_wall - stamp) > self.max_age:
-            self.last_rejection = f"sensor{sensor}: stale/future source timestamp; check clock synchronization"
+        age_sec = now_wall - stamp
+        if abs(age_sec) > self.max_age:
+            self.last_rejection = (
+                f"sensor{sensor}: stale/future source timestamp; "
+                f"sample age (receipt - source): {age_sec * 1000:+.1f} ms; "
+                f"threshold: +/-{self.max_age * 1000:g} ms; check clock synchronization"
+            )
             return None
         previous = self._last_stamps.get(sensor)
         if previous is not None and stamp <= previous:

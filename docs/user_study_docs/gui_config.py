@@ -1,5 +1,9 @@
 # Shared GUI, acquisition, and central ATI settings: literal assignments only.
 # This file is read without execution. Restart the affected process after edits.
+# With --demo: True uses live Sensor 4 TF only; False simulates all sensors.
+# Sensor 4 testing disables ATI bias/release checks. Ignored without --demo.
+DEMO_SENSOR4_ONLY = True
+
 # Rest time between trials, tasks, and objects, in seconds.
 # Use finite nonnegative numbers; 0 skips rest and fractional seconds round up.
 trials = 60
@@ -23,6 +27,13 @@ TF_WAIT_TOLERANCE_MS = 500.0
 # Cancel an unfinished rotation cycle when the sum of all three bias-corrected
 # finger-force magnitudes is at or below this value in N. Keep the original neutral.
 RELEASE_FORCE_THRESHOLD_N = 0.5
+
+# A completed rotation cycle fails when the fraction of valid axial-error
+# samples strictly above AXIAL_ERROR_THRESHOLD_DEG is strictly greater than
+# AXIAL_ERROR_MAX_EXCEEDANCE_RATIO. Low-motion and unavailable errors are excluded.
+# Angle range: 0-90 degrees. Ratio range: 0-1 (0.20 means 20%). Restart the GUI.
+AXIAL_ERROR_THRESHOLD_DEG = 45.0
+AXIAL_ERROR_MAX_EXCEEDANCE_RATIO = 0.4
 
 # Positive magnitude limits shared by all advisor bars and waveforms.
 # Bars show 0-FORCE_LIMIT_N; waveforms share the signed +/-FORCE_LIMIT_N axis.

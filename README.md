@@ -330,11 +330,85 @@ The trial selector follows [Trials_lookup.csv](docs/user_study_docs/Trials_looku
 
 For each user's Roll, Pitch, and Yaw task at each object diameter, the sequence is **practice → existing rest → angle test → five measured trials**. Practice defaults to ±20° for the 50 mm object and ±10° for the 80 mm object; the researcher can adjust these practice targets. Starting the first measured rotation trial without a valid range measurement opens an angle test after the preparation countdown. The participant starts at neutral and rotates to their maximum in both task directions. The researcher clicks **Finish angle test** after observing both directions. The symmetric measured-trial target is `min(positive maximum, magnitude of negative maximum, configured target cap for the object diameter)`. The cap comes from `PRACTICE_TARGETS_DEG` in `gui_config.py`: currently 20° for 50 mm and 10° for 80 mm. For a 50 mm object, limits of −50° and +60° therefore produce a target of ±20°; limits of −12° and +60° produce ±12°. Both the selected target and measured directions must extend beyond the neutral band. The test uses the same signed integration about the moving object task axis as cycle counting.
 
+After a successful angle test, the advisor can edit **Target ±°** and click
+**Apply target** or press **Enter** before starting a trial. A valid changed value
+also applies when Start or participant Space starts that trial. The target must
+be finite, greater than the neutral band, and no larger than either measured
+directional limit or the configured target cap. Applied values are reused for
+the same user, object diameter, and task across repetitions and restarts during
+the current GUI run. Other groups keep their own values. Target editing is locked
+during preparation, recording, saving, and rest; a new accepted angle test clears
+that group's manual override. Original calibration measurements and their
+automatic target stay unchanged. Each trial records its actual `target_deg`,
+`target_source`, and `target_override_deg` alongside the original
+`rotation_calibration`. An unchanged rounded display retains the exact calibrated
+value for counting.
+
+During an active rotation practice, the advisor can click **Reset neutral** beside
+the Neutral setting to use the current fresh Sensor 4 orientation as the new
+neutral. The measured angle returns to zero while **completed cycles are
+retained**. The digital twin keeps its pickup display reference. The unfinished
+cycle starts again from the new neutral. The same
+practice recording and timer continue. This control is available in live and demo
+practice; it is disabled during preparation, angle tests, measured trials, and
+finger gaiting, and while tracking is unavailable. Recorded practices retain the
+original baseline in metadata and append each reset to `neutral_reset_events`,
+with a `neutral_reset` marker in `rotation_progress.csv`.
+
+The advisor's **Restart trial** button repeats the currently selected trial during
+preparation, recording, rest, or after it finishes. During recording, the GUI first
+stops acquisition into that attempt, saves all accepted rows with result
+`restarted`, and waits for its files to close. It then moves that exact attempt
+folder intact into the task's `Archive/`. Restarting a finished attempt preserves
+its existing result and data. Archive collisions receive a unique suffix; an
+archive failure stops the restart and leaves the data available for review.
+The current trial remains selected, completed cycles reset to zero, and pickup
+and neutral preparation begin again. Accepted angle-test targets remain available.
+A restarted live measured recording needs a new advisor Force bias before it can
+start; restarting only an unfinished preparation retains its unused bias approval.
+Demo previews and angle tests restart without creating archive folders or files.
+
 Once the angle test finishes and the advisor has completed Force bias for that measured trial, the participant presses **Space** or the researcher selects **Start trial** to begin the pickup and neutral preparation countdowns. Each later measured repetition requires another successful advisor Force bias. The accepted range and target remain in memory and are reused across all five measured repetitions for that same user, diameter, and task during the current GUI run. Selecting a later measured repetition directly still requires a successful angle test for its group. Changing the user, object diameter, or rotation task requires the corresponding group's measurement. A fresh GUI run requires new measurements. Finger gaiting (`G`) keeps its manual-count workflow and requires no rotation angle test.
+
+Rotation practice and measured trials count only successful cycles toward the
+target of 20. Edit these settings in
+[gui_config.py](docs/user_study_docs/gui_config.py) and restart the GUI:
+
+```python
+AXIAL_ERROR_THRESHOLD_DEG = 30.0
+AXIAL_ERROR_MAX_EXCEEDANCE_RATIO = 0.20  # 20 percent
+```
+
+A completed cycle fails when more than 20% of its valid axial-error samples are
+strictly above 30°. Exactly 30° is within the angle threshold, and exactly 20%
+passes. The angle threshold accepts 0–90°; the ratio accepts 0–1. The denominator
+contains only samples with a defined axial error; low-motion, unavailable, and
+duplicate samples are excluded, so pauses cannot dilute the error fraction.
+With no valid error samples, the ratio is unavailable and this rule does not
+reject the cycle. The full neutral → negative → neutral → positive → neutral
+sequence is evaluated only when it completes. A cycle starts at the first
+neutral sample that arms counting, or at the preceding cycle's completion; the
+completion sample contributes to the ending cycle only. Tracking interruptions,
+object release, and practice neutral resets discard unfinished cycle statistics.
+Angle tests and manually counted finger gaiting do not use this rule.
+
+Failed cycles leave recording active and all force, orientation, progress, and
+axial-error CSV streams continue. The participant window displays "Cycle not
+counted" with the off-axis angle threshold, measured sample percentage, allowed
+percentage, and a prompt to try again. This reason remains until the next
+successful cycle; in live mode, tracking-loss and object-release warnings take priority.
+`rotation_progress.csv` marks their completion
+with phase `cycle_failed`. At save time, `trial_metadata.json` includes
+`failed_cycles` with each failed cycle's source and trial-elapsed start/end
+timestamps, valid/exceeding sample counts, and exceedance ratio. `cycle_results`
+retains every completed attempt, `attempted_cycles` includes successes and
+failures, and `completed_cycles` includes successes only. The applied thresholds
+and sample policy are saved under `rotation_cycle_quality` in session and trial
+metadata.
 
 A tracking gap or invalid/discontinuous orientation history invalidates the angle test; repeat it from neutral. Finishing before both directions have been measured or cancelling the test also leaves measured trials unavailable until a successful test completes. Rotation calibration is **measurement only** in live and demo modes: it creates no participant/session folders, `RotationCalibration` directories, CSV files, or standalone metadata/bias files. Its accepted range is copied into each subsequent measured trial's metadata. Demo preview keeps the same workflow without creating trial files.
 
-The participant window has a white background and displays trial/task information, overall progress, the object mesh, and the target axis. It omits the STL caption, individual rotation-phase instructions, and the five-step sequence strip. The selected 50 mm or 80 mm mesh follows sensor 4 orientation relative to a captured baseline, converted using the configured sensor-to-object mounting relationship. Roll, pitch, and yaw always use the object's moving X, Y, and Z axes respectively. The target axis follows the object as the participant adjusts their wrist.
+The participant window has a white background and displays trial/task information, overall progress, the object mesh, and only the current target axis. It omits the STL caption, individual rotation-phase instructions, and the five-step sequence strip. The selected 50 mm or 80 mm mesh follows sensor 4 orientation relative to the reference captured when pickup preparation starts, converted using the configured sensor-to-object mounting relationship. Roll, pitch, and yaw show only the object's moving X, Y, and Z axis respectively; the other two axis arrows and labels are hidden. Finger gaiting shows only the moving Z axis because its gaiting movement is around object Z. The visible target axis retains its highlight and curved rotation cue, and follows the object as the participant adjusts their wrist. This display applies to practice, preparation, angle tests, and measured trials as applicable, and updates when the selected task changes.
 
 With the participant window focused, press **Space** to start the selected trial or its required angle test once its start requirements are met. After completing 20 cycles and saving the data, the participant automatically enters a rest period. In either mode, press **Space** during rest to skip its remainder; the next preparation countdown starts only when its requirements, including a new advisor Force bias for a live measured trial, are satisfied. When rest finishes naturally, press **Space** when ready to proceed. If Force bias is still required, the participant display asks them to wait for the researcher. Every start first shows **Pick up the object**, then **Hold the object at neutral**, each with a circular countdown. Their durations come from `PICKUP_SEC` and `HOLD_NEUTRAL_SEC` in `gui_config.py`, defaulting to **10 seconds** and **5 seconds**. A fresh orientation baseline is captured only after both stages finish; pickup motion contributes no calibration samples or trial data. This applies to practice, angle tests, and measured trials, using either Space or the advisor's Start button. The advisor can cancel preparation during either stage. In live mode, Space is ignored during preparation, recording, and saving; holding Space does not submit repeated requests. Early stops and save errors require the researcher to select or restart a trial. After the last trial, the participant sees a completion message.
 
@@ -350,6 +424,18 @@ Both values are finite positive numbers in **seconds**; fractional seconds round
 up to whole seconds. Older configuration files without these settings retain the
 10-second pickup and 5-second neutral defaults. Session and trial metadata record
 the applied durations under `preparation_seconds`.
+
+During pickup and neutral preparation, the countdown appears in the upper-right
+corner beside the live digital twin. The twin follows fresh Sensor 4 orientation relative to a display
+reference captured when preparation starts, using the configured object mounting.
+Missing or stale tracking holds the last displayed orientation and marks it as
+unavailable. Preparation motion contributes no cycle counts or calibration
+measurements. At the end of neutral preparation, the current orientation becomes
+the trial's measurement neutral. The digital twin continues in the same pickup
+frame without re-zeroing when recording starts. Its display reference resets only
+when a new pickup preparation begins, including after a trial restart. Selecting
+a trial, cancelling preparation, resetting practice neutral, and recovering
+tracking keep the existing display reference.
 
 Rest durations come from [gui_config.py](docs/user_study_docs/gui_config.py), whose rest values are in **seconds**: `trials = 60`, `tasks = 120`, and `objects = 300`. These settings give 60 seconds between trials, 120 seconds between tasks, and 300 seconds between objects. Only one duration applies at a boundary: changing objects takes priority over changing tasks, then ordinary trial rest. Practice-to-measured transitions within the same task/object use the ordinary trial rest. Both preparation and rest use the same circular display, with only the integer remaining seconds in its center. No elapsed / total time appears below the ring. Rest finishes on `0`; the Space prompt appears once the next trial's start requirements are met. The first trial and the end of the study have no rest period. Advisor trial-start/navigation controls wait until rest finishes or the participant skips it with Space; Ctrl+C still saves and closes normally.
 
@@ -435,13 +521,53 @@ python -m utils.gui.glb_prepare docs/mesh_sources/80mm.glb utils/object_meshes/8
 
 The preparation command saves one final GLB and preserves its source. Preparing dense models requires VTK, available in the system Python environment on this workstation. VTK is only needed for preparation; the GUI uses Tkinter, NumPy, and Python's standard library at runtime. The current loader supports uncompressed GLB geometry with flat material colors. The previous display STLs are archived under `docs/mesh_sources/legacy_display/`; standalone STL loading and the `utils.gui.mesh_repair` preparation command remain available for legacy models.
 
-Reference axes start at the model's original scene `(0, 0, 0)`, and orientation rotates around this same origin. Camera framing uses a separate display offset; it does not replace the model origin with its bounding-box center. GLB metre coordinates are converted to millimetres while preserving the exported XYZ orientation. Reference arrows are thicker, with additional emphasis on the task's target axis. Trial metadata records the actual model path and its origin.
+The visible target-axis arrow starts at the model's original scene `(0, 0, 0)`, and orientation rotates around this same origin. Camera framing uses a separate display offset; it does not replace the model origin with its bounding-box center. GLB metre coordinates are converted to millimetres while preserving the exported XYZ orientation. Only the highlighted target-axis arrow and label are shown, together with the origin marker and curved rotation cue. Trial metadata records the actual model path and its origin.
+
+To test rotation cycle success using **only live Sensor 4**, set this literal
+boolean in [gui_config.py](docs/user_study_docs/gui_config.py), then restart:
+
+```python
+DEMO_SENSOR4_ONLY = True
+```
+
+```bash
+python -m utils.gui.study_gui --demo
+```
+
+Start the Polhemus TF publisher in the same ROS 2 environment so the GUI can
+receive `polhemus_base -> sensor4`. The NI-DAQ, LabJack and ATI processor are
+not required. Both window titles identify **SENSOR 4 TEST**. This mode uses live
+orientation without generating simulated poses or force samples. ATI force
+bias, the force-stream requirement and force-based object-release detection are
+disabled; finger-force charts show **N/A**. Sensor 4 availability, tracking-gap
+handling, object mounting, neutral capture and cycle-quality rules remain active.
+Select a rotation **practice** trial to test directly with the configured
+practice target; measured trials still require the real rotation angle test.
+The advisor shows successful, failed and attempted cycles, the success rate
+(`successful / completed attempts`, or unavailable before the first attempt),
+and the actual loaded angle and sample-ratio thresholds. Interrupted partial
+cycles are excluded from completed attempts, as in the normal cycle rules.
+Space can start trials and skip rest, but cannot skip preparation or cycle
+counting in this mode.
+
+The existing **Save data (CSV + metadata)** checkbox also applies here. Saved
+tests go under `User_Study_Data/demo/sensor4_only/` by default (or
+`<data-root>/sensor4_only/` when overridden). Metadata identifies
+`sensor4_only: true`, `orientation_source: "live_sensor4_tf"`,
+`force_source: "disabled"` and disabled release detection. Orientation,
+axis-error and progress CSVs contain real tracking-derived data; force CSVs
+retain their headers with no data rows, and the bias snapshot states that
+force acquisition was disabled. Missing ATI data does not trigger review
+warnings in this mode. Unchecking saving runs without creating files.
+Set `DEMO_SENSOR4_ONLY = False` to restore the fully simulated demo.
+Omitting the setting also defaults to `False`. The setting applies only with
+`--demo`; formal/live mode retains all existing force requirements.
 
 GUI configuration options:
 
 | Argument | Meaning |
 | --- | --- |
-| `--demo` | Generate simulated samples; default save root is `User_Study_Data/demo/` |
+| `--demo` | Run the configured demo: simulated by default, or live Sensor 4 testing when `DEMO_SENSOR4_ONLY = True` |
 | `--data-root` | Override the save root; live mode defaults to repository `User_Study_Data/` |
 | `--protocol` | Override the trial lookup CSV |
 | `--gui-config` | Literal GUI configuration; defaults to `docs/user_study_docs/gui_config.py` |
@@ -494,13 +620,13 @@ T = [[-0.5,      sqrt(3)/2,  0],
      [ 0,        0,         -1]]
 ```
 
-The displayed mesh uses `C = T.T @ R0.T @ Rt @ T`, where `R0` is the baseline sensor-4 rotation and `Rt` is its current rotation. Cycle counting uses consecutive poses: `D = C_previous.T @ C_current = T.T @ R_previous.T @ R_current @ T`. Each step's signed twist is measured about the previous object frame's task axis and added to the cycle angle in `rotation_progress.csv`. Thus yaw follows object Z even after object Z has tilted away from its initial direction. Start normally with `python -m utils.gui.study_gui`; no alignment argument is required. Trial metadata stores `object_to_sensor4_matrix`, `rotation_frame: "moving_object"`, `mesh_rotation_frame: "baseline_object"`, and the cycle-angle definition/reset policy. The existing `mesh_to_sensor4_matrix` field holds the same mounting rotation. `object_orientation.csv` retains the original sensor-4 quaternions.
+The displayed mesh uses `M = T.T @ R_pickup.T @ Rt @ T`, where `R_pickup` is the sensor-4 rotation at pickup preparation start and `Rt` is its current rotation. Measurement uses its separate neutral reference `C = T.T @ R0.T @ Rt @ T`, with `R0` captured at the end of neutral preparation. Cycle counting uses consecutive poses: `D = C_previous.T @ C_current = T.T @ R_previous.T @ R_current @ T`. Each step's signed twist is measured about the previous object frame's task axis and added to the cycle angle in `rotation_progress.csv`. Thus yaw follows object Z even after object Z has tilted away from its initial direction. Start normally with `python -m utils.gui.study_gui`; no alignment argument is required. Trial metadata stores `object_to_sensor4_matrix`, `rotation_frame: "moving_object"`, `mesh_rotation_frame: "pickup_object"`, the pickup reference in `mesh_baseline_xyzw` and `mesh_baseline_source_timestamp_sec`, and the cycle-angle definition/reset policy. The existing `mesh_to_sensor4_matrix` field holds the same mounting rotation. `baseline_xyzw` still records measurement neutral, and `object_orientation.csv` retains the original sensor-4 quaternions.
 
-Both windows show **Axis error** during a rotation trial. The participant's angle row shows the cycle angle, target, and neutral band; during an angle test it shows the current angle, measured maxima, and target. The participant's separate feedback row shows only axis error. **Accumulated angle** appears in the advisor window and remains recorded in the trial data. Finger gaiting uses the cycle count and the footer's researcher-counting reminder, with no separate angle summary.
+Both windows show **Axis error** during a rotation trial. The participant's angle row shows the cycle angle, target, and neutral band; during an angle test it shows the current angle, measured maxima, and target. The participant's separate feedback row shows only axis error. **Accumulated angle** appears in the advisor window and remains recorded in the trial data. Finger gaiting shows the Z-axis visual guide, the cycle count, and a footer identifying Object Z axis and researcher counting, with no separate angle summary. It retains manual counting and requires no rotation angle test.
 
 Axis error and accumulated angle use the moving object axes: `D = T.T @ R_previous.T @ R_current @ T` expresses each incremental rotation in the previous sample's object frame. Axis error is `degrees(acos(abs(dot(increment_axis, task_axis))))`, from 0° to 90°; forward and reverse movement along the same axis have equal error. Accumulated angle sums the signed task-axis twist of each valid increment. It follows the motion path and can accumulate measurement noise; returning this sum to zero does not necessarily restore the starting orientation. Sensor 4 measures the total object motion, including motion caused by wrist adjustments.
 
-Axis error is unavailable when the inter-sample rotation is below 0.05°, matching the existing RViz minimum-motion setting. This is a motion threshold, not a calibrated noise bound. Small valid angle increments still contribute to the cycle and accumulated angles. Duplicate timestamps are ignored. A gap above 0.5 seconds, backwards/invalid samples, tracking loss, or a pose-queue overflow breaks the adjacent-sample reference. The cycle angle is re-zeroed at the first valid recovered pose, while the trial's accumulated angle retains the sum of observed intervals and is marked **partial**. Trial metadata records the method, thresholds, accumulated angle, and continuity. Axis error is feedback; cycle progression uses crossings of the local task-angle zones. Finger gaiting has no defined target rotation axis and displays N/A.
+Axis error is unavailable when the inter-sample rotation is below 0.05°, matching the existing RViz minimum-motion setting. This is a motion threshold, not a calibrated noise bound. Small valid angle increments still contribute to the cycle and accumulated angles. Duplicate timestamps are ignored. A gap above 0.5 seconds, backwards/invalid samples, tracking loss, or a pose-queue overflow breaks the adjacent-sample reference. The cycle angle is re-zeroed at the first valid recovered pose, while the trial's accumulated angle retains the sum of observed intervals and is marked **partial**. Trial metadata records the method, thresholds, accumulated angle, and continuity. Axis error is feedback; cycle progression uses crossings of the local task-angle zones. Finger gaiting uses object Z as its visual guide; axis error is not measured, so the advisor shows N/A and the participant's axis-error row is omitted.
 
 Cycle counting does not apply an Axis-error acceptance threshold. A high Axis
 error is displayed and saved, while counting still uses task-axis angle,

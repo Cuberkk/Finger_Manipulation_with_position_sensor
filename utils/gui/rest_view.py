@@ -82,7 +82,9 @@ class RestCountdownView(tk.Frame):
         kind, elapsed, total, remaining, progress, complete, next_label, instruction, skipped = self._state
         c = self.canvas
         c.delete("all")
-        scale = max(.45, min(self.font_scale, width / 600, height / 550))
+        # Preparation uses a compact corner panel beside the live twin.
+        reference_width, reference_height = (240, 240) if kind == "preparation" else (600, 550)
+        scale = max(.45, min(self.font_scale, width / reference_width, height / reference_height))
         padding = max(12, min(width * .04, height * .03))
         text_width = max(40, width - 2 * padding)
 

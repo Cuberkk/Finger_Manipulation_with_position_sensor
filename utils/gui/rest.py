@@ -17,7 +17,9 @@ _KINDS = ("trials", "tasks", "objects")
 _STUDY_SETTINGS = ("PRACTICE_TARGETS_DEG", "SENSOR4_FROM_OBJECT")
 _OPTIONAL_SETTINGS = ("TF_WAIT_TOLERANCE_MS", "FORCE_LIMIT_N", "TORQUE_LIMIT_NMM",
                       "NIDAQ_SAMPLE_RATE_HZ", "LABJACK_SAMPLE_RATE_HZ",
-                      "RELEASE_FORCE_THRESHOLD_N", "PICKUP_SEC", "HOLD_NEUTRAL_SEC")
+                      "RELEASE_FORCE_THRESHOLD_N", "PICKUP_SEC", "HOLD_NEUTRAL_SEC",
+                      "AXIAL_ERROR_THRESHOLD_DEG", "AXIAL_ERROR_MAX_EXCEEDANCE_RATIO",
+                      "DEMO_SENSOR4_ONLY")
 DEFAULT_TF_WAIT_TOLERANCE_MS = 500.0
 DEFAULT_FORCE_LIMIT_N = 10.0
 DEFAULT_TORQUE_LIMIT_NMM = 100.0
@@ -26,6 +28,8 @@ DEFAULT_LABJACK_SAMPLE_RATE_HZ = 350.0
 DEFAULT_RELEASE_FORCE_THRESHOLD_N = 0.5
 DEFAULT_PICKUP_SEC = 10
 DEFAULT_HOLD_NEUTRAL_SEC = 5
+DEFAULT_AXIAL_ERROR_THRESHOLD_DEG = 30.0
+DEFAULT_AXIAL_ERROR_MAX_EXCEEDANCE_RATIO = 0.20
 
 
 def _whole_seconds(value, name):
@@ -85,6 +89,9 @@ class StudySettings:
     release_force_threshold_n: float = DEFAULT_RELEASE_FORCE_THRESHOLD_N
     pickup_sec: int = DEFAULT_PICKUP_SEC
     hold_neutral_sec: int = DEFAULT_HOLD_NEUTRAL_SEC
+    axial_error_threshold_deg: float = DEFAULT_AXIAL_ERROR_THRESHOLD_DEG
+    axial_error_max_exceedance_ratio: float = DEFAULT_AXIAL_ERROR_MAX_EXCEEDANCE_RATIO
+    demo_sensor4_only: bool = False
 
 
 def _read_literal_settings(path: str | Path) -> dict:
@@ -216,13 +223,28 @@ def _positive_setting(value, name: str) -> float:
     return limit
 
 
+def _bounded_setting(value, name: str, maximum: float) -> float:
+    message = f"{name} must be a finite number between 0 and {maximum:g}, inclusive."
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(message)
+    try:
+        number = float(value)
+    except (ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not math.isfinite(number) or not 0 <= number <= maximum:
+        raise ValueError(message)
+    return number
+
+
 def load_study_settings(path: str | Path) -> StudySettings:
-    """Load literal study, acquisition, timing, release and display settings.
+    """Load literal study, acquisition, timing, quality and display settings.
 
     Existing files with rest, targets and mounting retain optional defaults.
     The configuration file is parsed without executing Python code.
     """
     values = _read_literal_settings(path)
+    if type(values.get("DEMO_SENSOR4_ONLY", False)) is not bool:
+        raise ValueError("DEMO_SENSOR4_ONLY must be True or False.")
     missing = set(_STUDY_SETTINGS) - values.keys()
     if missing:
         raise ValueError("Missing study settings: " + ", ".join(sorted(missing)) + ".")
@@ -247,6 +269,13 @@ def load_study_settings(path: str | Path) -> StudySettings:
             values.get("PICKUP_SEC", DEFAULT_PICKUP_SEC), "PICKUP_SEC")),
         hold_neutral_sec=math.ceil(_positive_setting(
             values.get("HOLD_NEUTRAL_SEC", DEFAULT_HOLD_NEUTRAL_SEC), "HOLD_NEUTRAL_SEC")),
+        axial_error_threshold_deg=_bounded_setting(
+            values.get("AXIAL_ERROR_THRESHOLD_DEG", DEFAULT_AXIAL_ERROR_THRESHOLD_DEG),
+            "AXIAL_ERROR_THRESHOLD_DEG", 90),
+        axial_error_max_exceedance_ratio=_bounded_setting(
+            values.get("AXIAL_ERROR_MAX_EXCEEDANCE_RATIO", DEFAULT_AXIAL_ERROR_MAX_EXCEEDANCE_RATIO),
+            "AXIAL_ERROR_MAX_EXCEEDANCE_RATIO", 1),
+        demo_sensor4_only=values.get("DEMO_SENSOR4_ONLY", False),
     )
 
 

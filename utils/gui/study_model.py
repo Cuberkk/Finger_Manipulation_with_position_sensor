@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 import math
+from numbers import Real
 import operator
 from pathlib import Path
 import re
@@ -375,6 +376,9 @@ class RotationCounter:
     traversal order. Invalid samples, backwards timestamps, or gaps greater
     than max_gap_sec discard the partial sequence and crossing reference while
     preserving completed cycles. Repeated timestamps contribute nothing.
+    A completed sequence counts only when its fraction of available axial-error
+    samples above the angle threshold does not exceed the configured ratio.
+    Completed attempts, including failures, retain their source-time boundaries.
     """
 
     _INSTRUCTIONS = {
@@ -387,7 +391,9 @@ class RotationCounter:
     }
 
     def __init__(self, target_deg: float = 30, neutral_deg: float = 5,
-                 target_cycles: int = 20, max_gap_sec: float = .5):
+                 target_cycles: int = 20, max_gap_sec: float = .5, *,
+                 axial_error_threshold_deg: float = 30.0,
+                 axial_error_max_exceedance_ratio: float = .20):
         self.target_deg = float(target_deg)
         self.neutral_deg = float(neutral_deg)
         self.max_gap_sec = float(max_gap_sec)
@@ -398,10 +404,36 @@ class RotationCounter:
                 or self.max_gap_sec <= 0
                 or self.target_cycles <= 0):
             raise ValueError("Invalid rotation counter thresholds, timing, or cycle count.")
+        self.axial_error_threshold_deg = self._quality_threshold(
+            axial_error_threshold_deg, "Axial-error angle threshold", 90.0)
+        self.axial_error_max_exceedance_ratio = self._quality_threshold(
+            axial_error_max_exceedance_ratio, "Axial-error exceedance ratio", 1.0)
         self.count = 0
+        self.cycle_results = []
         self.phase = "seek_neutral"
         self._last_angle = None
         self._last_timestamp = None
+        self._clear_cycle_quality()
+
+    @staticmethod
+    def _quality_threshold(value, name: str, maximum: float) -> float:
+        if isinstance(value, bool) or not isinstance(value, Real):
+            raise ValueError(f"{name} must be a finite number from 0 to {maximum:g}.")
+        try:
+            value = float(value)
+        except (ValueError, OverflowError) as exc:
+            raise ValueError(f"{name} must be a finite number from 0 to {maximum:g}.") from exc
+        if not math.isfinite(value) or not 0 <= value <= maximum:
+            raise ValueError(f"{name} must be a finite number from 0 to {maximum:g}.")
+        return value
+
+    @property
+    def attempted_cycles(self) -> int:
+        return len(self.cycle_results)
+
+    @property
+    def failed_cycles(self) -> list[dict]:
+        return [cycle for cycle in self.cycle_results if cycle["failed"]]
 
     @property
     def complete(self) -> bool:
@@ -418,6 +450,61 @@ class RotationCounter:
     def _restart_partial(self):
         self.phase = "complete" if self.complete else "seek_neutral"
         self._last_angle = None
+        self._clear_cycle_quality()
+
+    def _clear_cycle_quality(self):
+        self._cycle_start_timestamp = None
+        self._cycle_start_elapsed = None
+        self._cycle_valid_samples = 0
+        self._cycle_exceeding_samples = 0
+
+    def _begin_cycle(self, timestamp: float, elapsed_sec: float | None):
+        self._clear_cycle_quality()
+        self._cycle_start_timestamp = timestamp
+        self._cycle_start_elapsed = elapsed_sec
+
+    @staticmethod
+    def _optional_finite(value) -> float | None:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            value = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return value if math.isfinite(value) else None
+
+    def _add_axial_error(self, error_deg):
+        error = self._optional_finite(error_deg)
+        if error is not None:
+            self._cycle_valid_samples += 1
+            self._cycle_exceeding_samples += int(error > self.axial_error_threshold_deg)
+
+    def _finish_cycle(self, timestamp: float, elapsed_sec: float | None) -> bool:
+        ratio = (self._cycle_exceeding_samples / self._cycle_valid_samples
+                 if self._cycle_valid_samples else None)
+        failed = ratio is not None and ratio > self.axial_error_max_exceedance_ratio
+        if not failed:
+            self.count += 1
+        self.cycle_results.append({
+            "attempt_number": self.attempted_cycles + 1,
+            "successful_cycle_number": None if failed else self.count,
+            "failed": failed,
+            "start_source_timestamp_sec": self._cycle_start_timestamp,
+            "end_source_timestamp_sec": timestamp,
+            "start_elapsed_sec": self._cycle_start_elapsed,
+            "end_elapsed_sec": elapsed_sec,
+            "valid_samples": self._cycle_valid_samples,
+            "exceeding_samples": self._cycle_exceeding_samples,
+            "exceedance_ratio": ratio,
+        })
+        self.phase = "complete" if self.complete else "negative"
+        if self.complete:
+            self._clear_cycle_quality()
+        else:
+            # The neutral boundary starts the next attempt, but this pose's
+            # error sample belongs only to the attempt that just ended.
+            self._begin_cycle(timestamp, elapsed_sec)
+        return not failed
 
     def reset_partial(self):
         """Require a new neutral visit, retaining already completed cycles."""
@@ -441,8 +528,14 @@ class RotationCounter:
             zones.append("positive")
         return zones if end >= start else zones[::-1]
 
-    def update(self, angle_deg: float, timestamp: float) -> bool:
-        """Return True only on the fresh sample that completes a full cycle."""
+    def update(self, angle_deg: float, timestamp: float, *,
+               axial_error_deg: float | None = None,
+               elapsed_sec: float | None = None) -> bool:
+        """Return True only when a fresh sample completes a successful cycle.
+
+        Missing axial errors are excluded from the fraction. An attempt without
+        available errors retains a null ratio and passes this threshold rule.
+        """
         if self.complete:
             return False
         try:
@@ -464,18 +557,22 @@ class RotationCounter:
         self._last_timestamp = time
         start = angle if self._last_angle is None else self._last_angle
         self._last_angle = angle
+        elapsed = self._optional_finite(elapsed_sec)
+        if self._cycle_start_timestamp is not None:
+            self._add_axial_error(axial_error_deg)
         completed = False
         for zone in self._visited_zones(start, angle):
             expected = self.phase if self.phase in ("negative", "positive") else "neutral"
             if zone != expected:
                 continue
             if self.phase == "neutral_after_positive":
-                self.count += 1
-                completed = True
-                self.phase = "complete" if self.complete else "negative"
+                completed = self._finish_cycle(time, elapsed)
                 if self.complete:
                     break
             else:
+                if self.phase == "seek_neutral":
+                    self._begin_cycle(time, elapsed)
+                    self._add_axial_error(axial_error_deg)
                 self.phase = {
                     "seek_neutral": "negative",
                     "negative": "neutral_after_negative",

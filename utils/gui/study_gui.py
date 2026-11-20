@@ -27,7 +27,10 @@ from utils.gui.advisor_layout import AdvisorBody
 from utils.gui.force_visualization import ForceWaveformView
 from utils.gui.force_release import total_force_magnitude
 from utils.gui.responsive import ResponsiveFonts
-from utils.gui.rest import DEFAULT_RELEASE_FORCE_THRESHOLD_N, RestCountdown, load_study_settings
+from utils.gui.rest import (
+    DEFAULT_AXIAL_ERROR_MAX_EXCEEDANCE_RATIO, DEFAULT_AXIAL_ERROR_THRESHOLD_DEG,
+    DEFAULT_RELEASE_FORCE_THRESHOLD_N, RestCountdown, load_study_settings,
+)
 from utils.gui.rest_view import RestCountdownView
 from utils.gui.shutdown import ShutdownSignals
 from utils.gui.study_model import (
@@ -37,7 +40,7 @@ from utils.gui.study_model import (
 from utils.gui.study_io import (
     FINGERS, SENSORS, FORCE_TOPICS, RAW_TOPICS, STALE_SEC, ROSBridge, TrialWriter, PreviewWriter,
     create_session, create_trial_directory, validate_user, utc_now,
-    force_bias_record, unique_directory,
+    archive_trial_directory, force_bias_record, unique_directory,
 )
 
 NAVY = "#0E1726"
@@ -123,6 +126,7 @@ class StudyApplication:
         self.shutdown_ok = True
         self.trials = load_trials(args.protocol)
         settings = load_study_settings(args.rest_config)
+        args.sensor4_only = args.demo and settings.demo_sensor4_only
         self.rest_times = settings.rest_times
         self.pickup_sec = settings.pickup_sec
         self.hold_neutral_sec = settings.hold_neutral_sec
@@ -130,10 +134,16 @@ class StudyApplication:
         self.force_limit_n = settings.force_limit_n
         self.torque_limit_nmm = settings.torque_limit_nmm
         self.release_force_threshold_n = settings.release_force_threshold_n
+        self.axial_error_threshold_deg = settings.axial_error_threshold_deg
+        self.axial_error_max_exceedance_ratio = settings.axial_error_max_exceedance_ratio
         self.gui_config_metadata = {
             "gui_config_file": str(args.rest_config),
+            "sensor4_only": self.sensor4_only,
+            "orientation_source": "live_sensor4_tf" if not args.demo or self.sensor4_only else "simulated",
+            "force_source": "disabled" if self.sensor4_only else "simulated" if args.demo else "live",
             "configured_tf_wait_tolerance_ms": settings.tf_wait_tolerance_ms,
             "release_force_threshold_n": settings.release_force_threshold_n,
+            "rotation_cycle_quality": self._cycle_quality_metadata(),
             "preparation_seconds": {"pickup": self.pickup_sec, "hold_neutral": self.hold_neutral_sec},
             "advisor_chart_limits": {
                 "force_limit_n": self.force_limit_n,
@@ -158,9 +168,19 @@ class StudyApplication:
         self.alignment = settings.sensor4_from_object.copy()
         self.index, self.state = 0, "ready"
         self.baseline = None
-        self.counter = RotationCounter()
+        self._display_baseline = None
+        self._display_baseline_source_timestamp = None
+        self._display_reference_frame = None
+        self._display_last_arrival = None
+        self._display_rotation = np.eye(3)
+        self._display_tracking = True
+        self._preparation_layout = False
+        self._neutral_reset_arrival = None
+        self._neutral_reset_events = []
+        self.counter = self._new_rotation_counter()
         self.axis_tracker = None
         self.calibrations = {}
+        self._target_overrides = {}
         self.calibrating = False
         self.range_calibration = None
         self.manual_count = 0
@@ -171,6 +191,7 @@ class StudyApplication:
         self.session_path = self.session_user = None
         self.session_metadata_path = None
         self.writer = None
+        self._restart_pending = None
         self.trial_path = None
         self.closing = False
         self.participant_start_error = False
@@ -193,12 +214,14 @@ class StudyApplication:
         self.selection = tk.StringVar()
         self.target = tk.StringVar()
         self.neutral = tk.StringVar(value="5")
-        self.require_ft = tk.BooleanVar(value=True)
+        self.require_ft = tk.BooleanVar(value=not self.sensor4_only)
         self.record_demo_data = tk.BooleanVar(value=True)
         self.record_demo_box = None
-        self.force_bias_label = tk.StringVar(value="Demo · simulated force data" if args.demo else
+        self.force_bias_label = tk.StringVar(value="Sensor 4 test · ATI disabled" if self.sensor4_only else
+                                            "Demo · simulated force data" if args.demo else
                                             "Waiting for the force processor…")
-        self.notice = tk.StringVar(value="Demo mode: simulated orientation and force data." if args.demo else "Connecting to ROS 2…")
+        self.notice = tk.StringVar(value="Sensor 4 test: connecting to live TF; ATI is disabled." if self.sensor4_only else
+                                  "Demo mode: simulated orientation and force data." if args.demo else "Connecting to ROS 2…")
         self.start_label = tk.StringVar(value="—")
         self.folder_label = tk.StringVar(value="Participant and trial folders are created when recording starts.")
         self.status_label = tk.StringVar(value="READY")
@@ -217,7 +240,13 @@ class StudyApplication:
         self.root.after(50, self.tick)
         # Start the worker last: widget construction failures cannot orphan it.
         self.bridge = ROSBridge(args.demo, self.events,
-                                release_force_threshold_n=self.release_force_threshold_n)
+                                release_force_threshold_n=self.release_force_threshold_n,
+                                sensor4_only=self.sensor4_only)
+
+    @property
+    def sensor4_only(self):
+        args = getattr(self, "args", None)
+        return getattr(args, "demo", False) and getattr(args, "sensor4_only", False)
 
     @property
     def trial(self):
@@ -226,6 +255,28 @@ class StudyApplication:
     @property
     def count(self):
         return self.counter.count if self.trial.axis else self.manual_count
+
+    def _cycle_quality_metadata(self):
+        return {
+            "axial_error_threshold_deg": getattr(
+                self, "axial_error_threshold_deg", DEFAULT_AXIAL_ERROR_THRESHOLD_DEG),
+            "max_exceedance_ratio": getattr(
+                self, "axial_error_max_exceedance_ratio", DEFAULT_AXIAL_ERROR_MAX_EXCEEDANCE_RATIO),
+            "ratio_definition": "samples above angle threshold / valid axial-error samples",
+            "failure_comparison": "error > angle threshold and exceedance ratio > maximum",
+            "unavailable_error_policy": "exclude low-motion and unavailable errors from both counts",
+            "no_valid_samples_policy": "ratio unavailable; does not fail the exceedance rule",
+            "boundary_policy": "first armed neutral to completing neutral; completion sample belongs to ending cycle",
+            "applies_to": "practice and measured rotation trials",
+        }
+
+    def _new_rotation_counter(self, target_deg=30.0, neutral_deg=5.0):
+        settings = self._cycle_quality_metadata()
+        return RotationCounter(
+            target_deg, neutral_deg,
+            axial_error_threshold_deg=settings["axial_error_threshold_deg"],
+            axial_error_max_exceedance_ratio=settings["max_exceedance_ratio"],
+        )
 
     def label(self, parent, text=None, variable=None, size=11, color=INK, bg="white", bold=False, **kwargs):
         return tk.Label(parent, text=text, textvariable=variable, font=("DejaVu Sans", size, "bold" if bold else "normal"),
@@ -242,7 +293,8 @@ class StudyApplication:
 
     def _build_researcher(self):
         r = self.root
-        r.title("ERIE · Study advisor" + (" · DEMO" if self.args.demo else ""))
+        r.title("ERIE · Study advisor" + (" · SENSOR 4 TEST" if self.sensor4_only else
+                                        " · DEMO" if self.args.demo else ""))
         advisor_height = min(1080, max(790, r.winfo_screenheight() - 90))
         r.geometry(f"1240x{advisor_height}+30+30")
         r.minsize(1060, 790)
@@ -258,7 +310,8 @@ class StudyApplication:
         header = tk.Frame(r, bg=NAVY, padx=24, pady=12)
         header.pack(fill="x")
         self.label(header, "ERIE  /  MANIPULATION STUDY", size=15, bold=True, color="white", bg=NAVY).pack(side="left")
-        self.label(header, "ADVISOR" + ("   •   DEMO" if self.args.demo else "   •   LIVE"), size=10,
+        self.label(header, "ADVISOR" + ("   •   SENSOR 4 TEST" if self.sensor4_only else
+                                       "   •   DEMO" if self.args.demo else "   •   LIVE"), size=10,
                    color="#88D8CA", bg=NAVY).pack(side="right")
         self.advisor_body = AdvisorBody(r, bg=LIGHT)
         self.advisor_body.pack(fill="both", expand=True)
@@ -283,7 +336,8 @@ class StudyApplication:
             demo_options = tk.Frame(setup_panel, bg="white", padx=12, pady=6,
                                     highlightbackground=TEAL, highlightthickness=1)
             demo_options.pack(fill="x", pady=(8, 0))
-            self.label(demo_options, "DEMO · DATA SAVING", size=10, color=TEAL, bold=True).pack(side="left")
+            self.label(demo_options, "SENSOR 4 TEST · DATA SAVING" if self.sensor4_only else
+                       "DEMO · DATA SAVING", size=10, color=TEAL, bold=True).pack(side="left")
             self.record_demo_box = tk.Checkbutton(
                 demo_options, text="Save data (CSV + metadata)", variable=self.record_demo_data,
                 command=self.demo_recording_changed, bg="white", fg=INK, selectcolor="white",
@@ -346,7 +400,15 @@ class StudyApplication:
             entry = ttk.Entry(settings, textvariable=variable, width=width)
             entry.pack(side="left", padx=(0, 16))
             self.setting_entries.append(entry)
+            if variable is self.target:
+                self.apply_target_button = ttk.Button(settings, text="Apply target",
+                                                      command=self.apply_calibrated_target, state="disabled")
+                self.apply_target_button.pack(side="left", padx=(0, 16))
+                entry.bind("<Return>", self.apply_calibrated_target)
         self.target_entry = self.setting_entries[0]
+        self.reset_neutral_button = ttk.Button(settings, text="Reset neutral",
+                                               command=self.reset_practice_neutral, state="disabled")
+        self.reset_neutral_button.pack(side="left", padx=(0, 16))
         self.require_box = tk.Checkbutton(settings, text="Require all 3 force streams", variable=self.require_ft, bg="white",
                                           fg=INK, activebackground="white", font=("DejaVu Sans", 9))
         self.require_box.pack(side="left")
@@ -356,6 +418,9 @@ class StudyApplication:
         self.start_button.pack(side="left", padx=(0, 8))
         self.stop_button = ttk.Button(buttons, text="Stop & save", command=self.stop_current, state="disabled")
         self.stop_button.pack(side="left", padx=(0, 8))
+        self.restart_button = ttk.Button(buttons, text="Restart trial", command=self.restart_trial,
+                                         state="disabled")
+        self.restart_button.pack(side="left", padx=(0, 8))
         self.cancel_calibration_button = ttk.Button(buttons, text="Cancel angle test",
                                                    command=lambda: self.finish_trial("calibration_cancelled"),
                                                    state="disabled")
@@ -387,12 +452,13 @@ class StudyApplication:
         self.force_bias_status_widget = self.label(status, variable=self.force_bias_label, size=10,
                                                   color=TEAL, anchor="w", justify="left", wraplength=900)
         self.force_bias_status_widget.pack(fill="x")
-        self.label(status, "Keep all 3 force sensors unloaded and stationary during bias.",
+        self.label(status, "Live Sensor 4 TF only; force charts are unavailable." if self.sensor4_only else
+                   "Keep all 3 force sensors unloaded and stationary during bias.",
                    size=9, color=MUTED).pack(anchor="w")
 
     def _build_participant(self):
         p = self.participant = tk.Toplevel(self.root)
-        p.title("ERIE · Participant")
+        p.title("ERIE · Participant" + (" · SENSOR 4 TEST" if self.sensor4_only else ""))
         p.geometry("1000x850+160+90")
         p.minsize(720, 650)
         p.configure(bg=PARTICIPANT_BG)
@@ -494,7 +560,7 @@ class StudyApplication:
         if self.state in ("ready", "finished", "resting") and self._force_bias_busy():
             self.notice.set("Force bias is in progress. Keep all 3 sensors unloaded and wait before starting.")
             return "break"
-        if self.args.demo:
+        if self.args.demo and not self.sensor4_only:
             if self.state == "countdown":
                 now = time.monotonic()
                 if now < self.deadline - self.hold_neutral_sec:
@@ -539,7 +605,7 @@ class StudyApplication:
         if self.state == "resting":
             return "Please rest. Press SPACE to skip the remaining rest."
         if self.state == "countdown":
-            suffix = " · SPACE to skip · DEMO" if self.args.demo else ""
+            suffix = " · SPACE to skip · DEMO" if self.args.demo and not self.sensor4_only else ""
             if now < self.deadline - self.hold_neutral_sec:
                 return f"Pick up the object.{suffix}"
             purpose = " Angle test starts next." if self.calibrating else ""
@@ -552,12 +618,20 @@ class StudyApplication:
                         "returning to neutral between directions. The researcher will finish the test.")
             if self.trial.axis and getattr(self, "_force_released", False):
                 return "Object released. Pick it up and continue using the original neutral."
-            if self.args.demo:
+            if tracking and self.trial.axis and self.counter.cycle_results:
+                result = self.counter.cycle_results[-1]
+                if result["failed"]:
+                    return (
+                        f"Cycle not counted: Axial Error exceeded {self.counter.axial_error_threshold_deg:g}° "
+                        f"in {result['exceedance_ratio']:.1%} / {self.counter.axial_error_max_exceedance_ratio:.1%} of valid samples")
+            if self.args.demo and not self.sensor4_only:
                 return "DEMO · Press SPACE to skip this trial's cycle counting."
             return ("Tracking lost · pause movement" if not tracking else
                     "Rotate smoothly around the highlighted axis." if self.trial.axis else
                     "Complete the gaiting movement.")
         if self.state == "saving":
+            if getattr(self, "_restart_pending", None) is not None:
+                return "Restarting this trial · saving the current attempt."
             if self.calibrating:
                 return "Finishing angle test…"
             if not getattr(self.writer, "recording_enabled", True):
@@ -595,6 +669,77 @@ class StudyApplication:
     def needs_calibration(self):
         return bool(self.trial.axis and not self.trial.practice and self.current_calibration() is None)
 
+    def calibrated_target(self):
+        calibration = self.current_calibration()
+        if calibration is None:
+            return None
+        return getattr(self, "_target_overrides", {}).get(self.calibration_key(), calibration["target_deg"])
+
+    def _can_edit_calibrated_target(self):
+        return (not self.closing and self.state in ("ready", "finished") and bool(self.trial.axis)
+                and not self.trial.practice and self.current_calibration() is not None)
+
+    def _calibrated_target_dirty(self):
+        target = self.calibrated_target()
+        if target is None:
+            return False
+        text = self.target.get().strip()
+        # Keep the exact calibrated value behind its unchanged rounded display.
+        if text == f"{target:.2f}":
+            return False
+        try:
+            return float(text) != target
+        except (TypeError, ValueError, OverflowError):
+            return True
+
+    def _validate_calibrated_target(self, value):
+        try:
+            target = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Target angle must be a finite positive number of degrees.") from exc
+        if not math.isfinite(target) or target <= 0:
+            raise ValueError("Target angle must be a finite positive number of degrees.")
+        try:
+            neutral = float(self.neutral.get())
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Neutral band must be a finite nonnegative angle.") from exc
+        if not math.isfinite(neutral) or neutral < 0:
+            raise ValueError("Neutral band must be a finite nonnegative angle.")
+        if target <= neutral:
+            raise ValueError("Target angle must be greater than the neutral band.")
+        calibration = self.current_calibration()
+        limits = [calibration["positive_max_deg"], calibration["negative_max_deg"],
+                  self.practice_targets_deg[self.trial.diameter_mm]]
+        if "target_cap_deg" in calibration:
+            limits.append(calibration["target_cap_deg"])
+        limit = min(limits)
+        if target > limit:
+            raise ValueError(f"Target angle must not exceed {limit:g}°, the measured/configured limit.")
+        return target
+
+    def apply_calibrated_target(self, event=None):
+        """Choose a target for future trials without changing measured limits."""
+        if not self._can_edit_calibrated_target():
+            return False
+        try:
+            value = self.target.get() if self._calibrated_target_dirty() else self.calibrated_target()
+            target = self._validate_calibrated_target(value)
+        except ValueError as exc:
+            self.notice.set(str(exc))
+            return False
+        if not hasattr(self, "_target_overrides"):
+            self._target_overrides = {}
+        key = self.calibration_key()
+        if target == self.current_calibration()["target_deg"]:
+            self._target_overrides.pop(key, None)
+        else:
+            self._target_overrides[key] = target
+        self.refresh_target()
+        self.participant_start_error = False
+        self.notice.set(f"Target set to ±{target:g}° for this user's {self.trial.diameter_mm} mm "
+                        f"{TASK_NAMES[self.trial.task]} trials.")
+        return True
+
     def refresh_target(self):
         if not self.trial.axis:
             self.target.set("N/A")
@@ -602,7 +747,7 @@ class StudyApplication:
             self.target.set(f"{self.practice_targets_deg[self.trial.diameter_mm]:g}")
         else:
             calibration = self.current_calibration()
-            self.target.set(f"{calibration['target_deg']:.2f}" if calibration else "Test required")
+            self.target.set(f"{self.calibrated_target():.2f}" if calibration else "Test required")
 
     def refresh_identity(self):
         self._retain_trial_force_bias(self.index)
@@ -628,9 +773,11 @@ class StudyApplication:
         self.participant_start_error = False
         self._participant_force_bias_error = False
         self.selection.set(f"{self.trial.reference}  ·  {self.trial.code}")
-        self.counter = RotationCounter()
+        self.counter = self._new_rotation_counter()
         self.axis_tracker = RotationAxisTracker(self.trial.axis) if self.trial.axis else None
         self.manual_count, self.baseline, self.angle = 0, None, 0.0
+        self._neutral_reset_arrival = None
+        self._neutral_reset_events = []
         self._reset_force_release()
         self.axis_motion_label.set(self.axis_motion_text())
         self.rotation = np.eye(3)
@@ -644,11 +791,12 @@ class StudyApplication:
         self.refresh_identity()
         self.part_trial.configure(text=f"Trial {self.trial.reference} / {self.total_trials}" if not self.trial.practice else f"Practice · {self.trial.reference}")
         self.part_task.configure(text=f"Trial Task: {self.trial.code}     ·     Task {task}")
-        axis = f"{TASK_NAMES[self.trial.task]}  /  Object {self.trial.axis.upper()} axis" if self.trial.axis else "Finger gaiting  /  researcher counts"
+        axis = f"{TASK_NAMES[self.trial.task]}  /  Object {self.trial.axis.upper()} axis" if self.trial.axis else "Finger gaiting  /  Object Z axis  /  researcher counts"
         self.part_axis.configure(text=axis)
         self.part_axis_motion.configure(text=self.axis_motion_text(participant=True))
         self.mesh.set_diameter(self.trial.diameter_mm)
-        self.mesh.set_pose(np.eye(3), self.trial.axis, tracking=True)
+        self.mesh.set_pose(getattr(self, "_display_rotation", np.eye(3)), self.trial.axis or "z",
+                           tracking=getattr(self, "_display_tracking", True))
         self.status_label.set("READY")
         self.notice.set(self.mesh.error or ("Ready. Start to pick up the object, then hold at neutral when prompted." if self.trial.axis else "Gaiting: the researcher records each completed cycle with +1."))
         self.update_progress()
@@ -663,11 +811,17 @@ class StudyApplication:
                          and not self._trial_force_bias_ready(force_bias=force_bias))
         for widget in [self.user_entry, *self.setting_entries, self.require_box]:
             widget.configure(state="disabled" if busy else "normal")
+        if self.sensor4_only:
+            self.require_box.configure(state="disabled")
         self.trial_select.configure(state="disabled" if busy else "readonly")
         self.start_button.configure(state="disabled" if busy or self.closing or bias_busy or bias_required else "normal",
                                     text=f"Start angle test  ·  {self.preparation_sec}s" if self.needs_calibration() else
                                     f"Start trial  ·  {self.preparation_sec}s")
-        self.target_entry.configure(state="disabled" if busy else "normal" if self.trial.practice else "readonly")
+        target_editable = self._can_edit_calibrated_target()
+        self.target_entry.configure(state="disabled" if busy else
+                                    "normal" if self.trial.practice or target_editable else "readonly")
+        if getattr(self, "apply_target_button", None) is not None:
+            self.apply_target_button.configure(state="normal" if target_editable else "disabled")
         self.cancel_calibration_button.configure(state="normal" if self.calibrating and self.state == "recording" else "disabled")
         if getattr(self, "record_demo_box", None) is not None:
             self.record_demo_box.configure(state="disabled" if self.state in
@@ -680,11 +834,90 @@ class StudyApplication:
         self.manual_button.configure(state="normal" if self.state == "recording" and not self.trial.axis else "disabled")
         self.next_button.configure(state="normal" if not busy and self.index < len(self.trials) - 1 else "disabled")
         self.previous_button.configure(state="normal" if not busy and self.index > 0 else "disabled")
+        if getattr(self, "restart_button", None) is not None:
+            self.restart_button.configure(state="normal" if self._can_restart_trial() else "disabled")
+        self._update_neutral_reset_control()
         if getattr(self, "force_bias_button", None) is not None:
             allowed = (not self.args.demo and not self.closing and
                        self.state not in ("countdown", "recording", "saving") and
                        force_bias is not None and force_bias.get("available", False) and not bias_busy)
             self.force_bias_button.configure(state="normal" if allowed else "disabled")
+
+    def _can_reset_practice_neutral(self):
+        return (not self.closing and self.state == "recording" and self.trial.practice
+                and bool(self.trial.axis) and not self.calibrating and self.writer is not None
+                and not self.writer.error and not self.writer.finished.is_set())
+
+    def _valid_neutral_reset_pose(self, pose, now):
+        if pose is None or not 0 <= now - pose.arrival <= STALE_SEC:
+            return False
+        try:
+            relative_rotation(pose.quaternion, pose.quaternion, self.alignment)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        return math.isfinite(pose.source_timestamp)
+
+    def _update_neutral_reset_control(self, snapshot=None, now=None):
+        button = getattr(self, "reset_neutral_button", None)
+        if button is None:
+            return
+        enabled = self._can_reset_practice_neutral()
+        if enabled:
+            snapshot = self.bridge.snapshot() if snapshot is None else snapshot
+            now = time.monotonic() if now is None else now
+            enabled = self._valid_neutral_reset_pose(snapshot.get("pose"), now)
+        button.configure(state="normal" if enabled else "disabled")
+
+    def reset_practice_neutral(self):
+        """Re-zero an active practice while retaining completed cycle counts."""
+        if not self._can_reset_practice_neutral():
+            return False
+        try:
+            updates = self.bridge.drain_neutral_reset_updates()
+        except ValueError as exc:
+            self.notice.set(str(exc))
+            self._update_neutral_reset_control()
+            return False
+        # Count already acquired motion in its original frame before re-zeroing.
+        now = time.monotonic()
+        self.process_poses(updates["poses"], now, allow_finish=False, force_events=updates)
+        if self.count >= 20:
+            self.finish_trial("completed")
+            return False
+        pose = updates["pose"]
+        now = time.monotonic()
+        if not self._can_reset_practice_neutral() or not self._valid_neutral_reset_pose(pose, now):
+            self.notice.set("Fresh Sensor 4 tracking is required to reset neutral.")
+            self._update_neutral_reset_control()
+            return False
+        event = {
+            "captured_utc": utc_now(), "elapsed_sec": max(0.0, updates["captured_at"] - self.started),
+            "receipt_time_sec": updates["captured_at"], "source_timestamp_sec": pose.source_timestamp,
+            "previous_baseline_xyzw": list(self.baseline), "baseline_xyzw": list(pose.quaternion),
+            "previous_angle_deg": self.angle, "previous_cycle_phase": self.counter.phase,
+            "completed_cycles": self.count,
+        }
+        self.baseline = pose.quaternion
+        self._neutral_reset_arrival = updates["captured_at"]
+        self.axis_tracker = RotationAxisTracker(self.trial.axis)
+        self.axis_tracker.update(np.eye(3), pose.source_timestamp)
+        self.counter.reset_partial()
+        if not getattr(self, "_force_released", False):
+            self.counter.update(0.0, pose.source_timestamp, elapsed_sec=event["elapsed_sec"])
+        self.angle, self.rotation = 0.0, np.eye(3)
+        self.previous_tracking = True
+        if not hasattr(self, "_neutral_reset_events"):
+            self._neutral_reset_events = []
+        self._neutral_reset_events.append(event)
+        self.writer.add("progress", None, (pose.source_timestamp, event["elapsed_sec"],
+                                           0.0, self.count, "neutral_reset"))
+        self._update_twin_pose(pose, now)
+        self.axis_motion_label.set(self.axis_motion_text())
+        self.part_axis_motion.configure(text=self.axis_motion_text(participant=True))
+        self.update_progress()
+        self.notice.set(f"Practice neutral reset. Completed cycles retained: {self.count}/20.")
+        self._update_neutral_reset_control()
+        return True
 
     def _force_bias_snapshot(self, snapshot=None):
         if snapshot is None:
@@ -796,7 +1029,9 @@ class StudyApplication:
         busy = self._force_bias_busy(snapshot)
         bias_ready = self._trial_force_bias_ready(force_bias=status)
         self._observe_force_bias_quality(snapshot)
-        if self.args.demo:
+        if self.sensor4_only:
+            text = "Sensor 4 test · ATI, force bias and object-release detection disabled"
+        elif self.args.demo:
             text = "Demo · simulated force data · force bias disabled"
         elif status is None:
             text = "Force bias unavailable · start the force processor."
@@ -871,18 +1106,24 @@ class StudyApplication:
             raise ValueError("Sensor 4 is unavailable. Start the Polhemus TF stream before this trial.")
         if self.mesh.error:
             raise ValueError(self.mesh.error)
-        if self.require_ft.get():
+        if self.require_ft.get() and not self.sensor4_only:
             missing = [f.title() for f, v in snapshot["fingers"].items() if v["value"] is None or now - v["arrival"] > STALE_SEC]
             if missing:
                 raise ValueError("Waiting for finger-frame force: " + ", ".join(missing) + ". Check the updated publishers.")
         return pose
 
-    def _prepare_trial_start(self):
+    def _prepare_trial_start(self, snapshot=None):
         calibration = self.current_calibration() if self.trial.axis and not self.trial.practice else None
-        target = (calibration["target_deg"] if calibration else
-                  float(self.target.get()) if self.trial.practice and self.trial.axis else 30.)
-        counter = RotationCounter(target, float(self.neutral.get()))
-        self.preflight(self.bridge.snapshot())
+        if calibration is not None:
+            if self._calibrated_target_dirty() and not self.apply_calibrated_target():
+                raise ValueError(self.notice.get())
+            target = self.calibrated_target()
+            if self.calibration_key() in getattr(self, "_target_overrides", {}):
+                target = self._validate_calibrated_target(target)
+        else:
+            target = float(self.target.get()) if self.trial.practice and self.trial.axis else 30.
+        counter = self._new_rotation_counter(target, float(self.neutral.get()))
+        self.preflight(self.bridge.snapshot() if snapshot is None else snapshot)
         return counter
 
     def demo_recording_changed(self):
@@ -900,8 +1141,9 @@ class StudyApplication:
             return False
         self._participant_force_bias_error = False
         try:
-            self._check_trial_force_bias(self.bridge.snapshot())
-            counter = self._prepare_trial_start()
+            snapshot = self.bridge.snapshot()
+            self._check_trial_force_bias(snapshot)
+            counter = self._prepare_trial_start(snapshot)
         except (ValueError, OverflowError) as exc:
             self.notice.set(str(exc))
             self.participant_start_error = True
@@ -915,15 +1157,60 @@ class StudyApplication:
         self.participant_start_error = False
         self.manual_count = 0
         self.state = "countdown"
+        self._display_baseline = tuple(snapshot["pose"].quaternion)
+        self._display_baseline_source_timestamp = snapshot["pose"].source_timestamp
+        self._display_reference_frame = "pickup_object"
+        self._display_last_arrival = snapshot["pose"].arrival
+        self._display_rotation = np.eye(3)
         self.deadline = time.monotonic() + self.preparation_sec
         self._preparation_stage = None
         self.set_controls()
         self.update_progress()
-        self.rest_view.place(relx=0, rely=0, relwidth=1, relheight=1)
-        self.rest_view.lift()
+        self._show_preparation()
         self._update_preparation(time.monotonic())
+        self._update_twin_pose(snapshot["pose"], time.monotonic())
         self.part_instruction.configure(text=self.participant_instruction(time.monotonic(), tracking=True))
         return True
+
+    def _show_preparation(self):
+        """Keep the countdown and live twin visible together during preparation."""
+        self._preparation_layout = True
+        self.mesh.pack_forget()
+        self.mesh.place(relx=0, rely=0, relwidth=.7, relheight=1)
+        self.rest_view.place(relx=1, rely=0, anchor="ne", relwidth=.3, relheight=.42)
+        self.rest_view.lift()
+
+    def _hide_preparation(self):
+        self.rest_view.place_forget()
+        if getattr(self, "_preparation_layout", False):
+            self.mesh.place_forget()
+            self.mesh.pack(fill="both", expand=True, padx=30)
+            self._preparation_layout = False
+
+    def _update_twin_pose(self, pose, now):
+        """Keep the pickup display frame independent of measurement neutral."""
+        if getattr(self, "_display_baseline", None) is None:
+            self.mesh.set_pose(getattr(self, "_display_rotation", np.eye(3)), self.trial.axis or "z",
+                               tracking=getattr(self, "_display_tracking", True))
+            return
+        last_arrival = getattr(self, "_display_last_arrival", None)
+        if pose is not None and last_arrival is not None and pose.arrival < last_arrival:
+            # A restart may have rendered a newer snapshot during this tick.
+            self._display_tracking = (getattr(self, "_display_tracking", True)
+                                      and now <= last_arrival + STALE_SEC)
+            self.mesh.set_pose(self._display_rotation, self.trial.axis or "z", tracking=self._display_tracking)
+            return
+        tracking = pose is not None and 0 <= now - pose.arrival <= STALE_SEC
+        if tracking:
+            try:
+                rotation = relative_rotation(self._display_baseline, pose.quaternion, self.alignment)
+            except ValueError:
+                tracking = False
+            else:
+                self._display_rotation = rotation
+                self._display_last_arrival = pose.arrival
+        self._display_tracking = tracking
+        self.mesh.set_pose(self._display_rotation, self.trial.axis or "z", tracking=tracking)
 
     def _update_preparation(self, now):
         if self.state != "countdown":
@@ -945,7 +1232,7 @@ class StudyApplication:
         )
 
     def begin_recording(self):
-        self.rest_view.place_forget()
+        self._hide_preparation()
         self._participant_force_bias_error = False
         try:
             if self.needs_calibration() and not self.calibrating:
@@ -959,7 +1246,9 @@ class StudyApplication:
             force_bias = self._force_bias_snapshot(snapshot)
             bias_record = ({"schema_version": 1, "captured_utc": utc_now(),
                             "demo": True, "biases": None,
-                            "description": "Simulated force data; no hardware bias is applied."}
+                            "description": ("Force acquisition disabled for live Sensor 4 testing; no hardware bias is applied."
+                                            if self.sensor4_only else
+                                            "Simulated force data; no hardware bias is applied.")}
                            if self.args.demo else force_bias_record(force_bias))
             when = datetime.now(self.zone)
             user = validate_user(self.user.get())
@@ -967,7 +1256,8 @@ class StudyApplication:
             recording_enabled = (not self.calibrating
                                  and (not self.args.demo or self.record_demo_data.get()))
             if recording_enabled and (self.session_path is None or self.session_user != user):
-                session_path = create_session(self.args.data_root, user, when)
+                data_root = self.args.data_root / "sensor4_only" if self.sensor4_only else self.args.data_root
+                session_path = create_session(data_root, user, when)
                 metadata_dir = unique_directory(session_path / "SessionMetadata", f"Session_{when:%Y%m%d_%H%M%S_%f}")
                 session_metadata_path = metadata_dir / "session_metadata.json"
                 session = {"user_number": user, "started_local": when.isoformat(), "timezone": self.args.timezone,
@@ -984,14 +1274,23 @@ class StudyApplication:
             self.trial_path = (create_trial_directory(self.session_path, user, self.trial, when)
                                if recording_enabled else None)
             self.baseline = pose.quaternion
+            if getattr(self, "_display_baseline", None) is None:
+                # Direct recording callers without preparation have no pickup frame.
+                self._display_baseline = pose.quaternion
+                self._display_baseline_source_timestamp = pose.source_timestamp
+                self._display_reference_frame = "baseline_object"
+                self._display_last_arrival = pose.arrival
+                self._display_rotation = np.eye(3)
             self.axis_tracker = RotationAxisTracker(self.trial.axis) if self.trial.axis else None
             if self.axis_tracker is not None:
                 self.axis_tracker.update(np.eye(3), pose.source_timestamp)
                 if not self.calibrating:
                     # The captured baseline is neutral. A first moving sample
                     # can already lie beyond the band without losing that pass.
-                    self.counter.update(0.0, pose.source_timestamp)
+                    self.counter.update(0.0, pose.source_timestamp, elapsed_sec=0.0)
             self.started = time.monotonic()
+            self._neutral_reset_arrival = None
+            self._neutral_reset_events = []
             self._reset_force_release()
             self.started_utc = utc_now()
             self.tracking_interruptions = 0
@@ -1012,9 +1311,22 @@ class StudyApplication:
                                                  self.trial.axis and not self.trial.practice else None),
                         "target_cycles": None if self.calibrating else 20,
                         "target_deg": None if self.calibrating else self.counter.target_deg,
+                        "target_source": (None if self.calibrating or not self.trial.axis else
+                                          "practice_setting" if self.trial.practice else
+                                          "manual_override" if self.calibration_key() in
+                                          getattr(self, "_target_overrides", {}) else "calibration"),
+                        "target_override_deg": (getattr(self, "_target_overrides", {}).get(self.calibration_key())
+                                                if not self.calibrating and self.trial.axis
+                                                and not self.trial.practice else None),
                         "neutral_deg": self.counter.neutral_deg,
                         "cycle_detection": "pass_through",
                         "cycle_sequence": ["neutral", "negative_target", "neutral", "positive_target", "neutral"],
+                        "rotation_cycle_quality": {
+                            **self._cycle_quality_metadata(),
+                            "enabled": bool(self.trial.axis and not self.calibrating),
+                        },
+                        "attempted_cycles": 0, "failed_cycle_count": 0,
+                        "failed_cycles": [], "cycle_results": [],
                         "neutral_crossing": "linear_between_adjacent_valid_samples",
                         "count_mode": ("rotation_range" if self.calibrating else
                                        "automatic_rotation" if self.trial.axis else "manual_gaiting"),
@@ -1022,9 +1334,15 @@ class StudyApplication:
                         "mesh_origin_xyz": [0.0, 0.0, 0.0], "mesh_coordinate_unit": "mm",
                         "mesh_to_sensor4_matrix": self.alignment.tolist(),
                         "object_to_sensor4_matrix": self.alignment.tolist(),
-                        "rotation_frame": "moving_object", "mesh_rotation_frame": "baseline_object",
+                        "rotation_frame": "moving_object", "mesh_rotation_frame": self._display_reference_frame,
+                        "mesh_baseline_xyzw": list(self._display_baseline),
+                        "mesh_baseline_source_timestamp_sec": self._display_baseline_source_timestamp,
+                        "mesh_relative_orientation_formula": ("A.T @ R_pickup.T @ Rt @ A" if
+                                                              self._display_reference_frame == "pickup_object" else
+                                                              "A.T @ R0.T @ Rt @ A"),
                         "baseline_xyzw": list(self.baseline),
                         "baseline_source_timestamp_sec": pose.source_timestamp,
+                        "neutral_reset_events": [],
                         "orientation_tf": {"parent": "polhemus_base", "child": "sensor4"},
                         "relative_orientation_formula": "A.T @ R0.T @ Rt @ A",
                         "axis_error_frame": "previous_object",
@@ -1037,6 +1355,7 @@ class StudyApplication:
                         "cycle_angle_definition": "sum of signed task-axis increments since the latest tracking reference",
                         "cycle_angle_reset_policy": "re-zero on first valid pose after a tracking interruption",
                         "rotation_release_detection": {
+                            "enabled": not self.sensor4_only,
                             "threshold_n": getattr(self, "release_force_threshold_n", DEFAULT_RELEASE_FORCE_THRESHOLD_N),
                             "force_metric": "sum of three bias-corrected finger-force magnitudes",
                             "max_force_age_sec": STALE_SEC,
@@ -1045,7 +1364,8 @@ class StudyApplication:
                         },
                         "force_unit": "N", "raw_torque_unit": "N*mm", "force_axes": "finger frame",
                         "transformed_components": ["Fx", "Fy", "Fz"],
-                        "topics": FORCE_TOPICS, "sensor_mapping": SENSORS, "require_all_force": self.require_ft.get(),
+                        "topics": FORCE_TOPICS, "sensor_mapping": SENSORS,
+                        "require_all_force": self.require_ft.get() and not self.sensor4_only,
                         "raw_topics": RAW_TOPICS, "raw_axes": "ATI sensor frame", "raw_bias_applied": False,
                         "force_bias": bias_record,
                         "storage_layout_version": 2, "task_trial_number": self.trial.task_position,
@@ -1080,6 +1400,8 @@ class StudyApplication:
             self.notice.set("Measure the maximum rotation in both directions, then click Finish angle test. "
                             "The range will be included in subsequent trial metadata." if
                             self.calibrating else
+                            "Recording live Sensor 4 orientation and cycle results; ATI is disabled." if
+                            recording_enabled and self.sensor4_only else
                             "Recording all incoming raw F/T and finger-force samples. Orientation baseline reset for this trial." if
                             recording_enabled else "Demo preview started. No CSV or metadata files are written.")
             if self.calibrating:
@@ -1131,6 +1453,8 @@ class StudyApplication:
 
     def _rotation_release_events(self, snapshot, now, force_events=None):
         """Collect callback transitions without copying the waveform histories."""
+        if self.sensor4_only:
+            return []
         active = self.state == "recording" and self.trial.axis and not self.calibrating
         if snapshot.get("force_release_events_supported") is True:
             batch = (force_events if force_events is not None
@@ -1179,12 +1503,15 @@ class StudyApplication:
         for pose in poses:
             if pose.arrival < (self.started or 0):
                 continue
+            reset_arrival = getattr(self, "_neutral_reset_arrival", None)
+            if reset_arrival is not None and pose.arrival <= reset_arrival:
+                continue
             while event_index < len(events) and events[event_index]["arrival"] <= pose.arrival:
                 self._apply_force_release_event(events[event_index])
                 event_index += 1
             try:
-                # The mesh uses this baseline-relative pose. The tracker takes
-                # consecutive poses to measure rotation about moving object axes.
+                # Measurement neutral and the pickup display reference are independent.
+                # The tracker measures rotation about moving object axes.
                 rotation = relative_rotation(self.baseline, pose.quaternion, self.alignment)
             except ValueError:
                 if self.state == "recording":
@@ -1192,6 +1519,7 @@ class StudyApplication:
                 continue
             self.rotation = rotation
             if self.state == "recording":
+                cycle_failed = False
                 if self.trial.axis:
                     measurement = self.axis_tracker.update(rotation, pose.source_timestamp)
                     if measurement is None:
@@ -1223,12 +1551,24 @@ class StudyApplication:
                     released = (getattr(self, "_force_released", False)
                                 or (reacquired_at is not None and pose.arrival < reacquired_at))
                     if self.angle is not None and not released:
-                        self.counter.update(self.angle, pose.source_timestamp)
+                        previous_attempts = self.counter.attempted_cycles
+                        self.counter.update(
+                            self.angle, pose.source_timestamp,
+                            axial_error_deg=measurement.error_deg,
+                            elapsed_sec=max(0.0, pose.arrival - self.started),
+                        )
+                        if self.counter.attempted_cycles > previous_attempts and self.counter.cycle_results[-1]["failed"]:
+                            cycle_failed = True
+                            result = self.counter.cycle_results[-1]
+                            self.notice.set(
+                                f"Cycle failed: {result['exceedance_ratio']:.1%} of valid axial-error samples "
+                                f"exceed {self.counter.axial_error_threshold_deg:g}°. "
+                                f"Successful cycles: {self.count}/20. Continue; data recording remains active.")
                 else:
                     self.angle = 0.0
                     released = False
                 self.writer.add("progress", None, (pose.source_timestamp, pose.arrival - self.started, self.angle, self.count,
-                                                   "object_released" if released else self.counter.phase if
+                                                   "object_released" if released else "cycle_failed" if cycle_failed else self.counter.phase if
                                                    self.trial.axis else "manual_gaiting"))
                 if self.count >= 20 and allow_finish:
                     for event in events[event_index:]:
@@ -1261,10 +1601,19 @@ class StudyApplication:
         if self.calibrating:
             limits = self.range_calibration
             text += f"   ·   Max +{limits.positive_max_deg:.1f}° / −{limits.negative_max_deg:.1f}°"
+        elif self.sensor4_only:
+            attempts = self.counter.attempted_cycles
+            rate = f"{self.count / attempts:.1%}" if attempts else "—"
+            text += (f"\nSuccessful: {self.count} · Failed: {len(self.counter.failed_cycles)} · "
+                     f"Attempts: {attempts} · Success rate: {rate}"
+                     f"\nFailure rule: error > {self.counter.axial_error_threshold_deg:g}° in "
+                     f"> {self.counter.axial_error_max_exceedance_ratio:.1%} of valid movement samples")
         return text
 
     def observe_ft_quality(self, snapshot, now):
         """Also retain interruptions that have not recovered by the end of a trial."""
+        if self.sensor4_only:
+            return
         for finger, item in snapshot["fingers"].items():
             stale = item["value"] is None or now - item["arrival"] > STALE_SEC
             if stale and not self.ft_stale[finger]:
@@ -1287,13 +1636,83 @@ class StudyApplication:
     def stop_current(self):
         self.finish_trial("calibration_completed" if self.calibrating else "stopped")
 
+    def _can_restart_trial(self):
+        return (not self.closing and self.state in ("countdown", "recording", "finished", "resting")
+                and (self.state != "recording" or self.writer is not None)
+                and getattr(self, "_restart_pending", None) is None)
+
+    def restart_trial(self):
+        """Save and archive this attempt, then prepare the same trial again."""
+        if not self._can_restart_trial():
+            return False
+        writer = self.writer
+        if writer is not None:
+            metadata = writer.metadata
+            if (metadata.get("user_number") != self.user.get().strip()
+                    or metadata.get("trial") != asdict(self.trial)):
+                writer = None
+        if self.state == "recording" and writer is None:
+            self.notice.set("Restart stopped because the recording does not match the selected trial and participant.")
+            return False
+        self._restart_pending = {"index": self.index, "user": self.user.get().strip(), "writer": writer}
+        if self.state == "recording":
+            self.finish_trial("restarted")
+            self.notice.set("Saving the current attempt before archiving and restarting this trial.")
+            self.poll_writer()
+        else:
+            if self.state == "countdown":
+                self.finish_trial("restarted")
+            elif self.state == "resting":
+                self._clear_rest()
+            self.state = "finished"
+            self._complete_trial_restart()
+        return True
+
+    def _complete_trial_restart(self):
+        pending = getattr(self, "_restart_pending", None)
+        if pending is None:
+            return
+        if self.closing:
+            self._restart_pending = None
+            return
+        if pending["index"] != self.index or pending["user"] != self.user.get().strip():
+            self._restart_pending = None
+            self.notice.set("Restart cancelled because the selected trial or participant changed.")
+            self.set_controls()
+            return
+        writer = pending["writer"]
+        if writer is not None and not writer.finished.is_set():
+            return
+        archived = None
+        if (writer is not None and getattr(writer, "recording_enabled", True)
+                and writer.metadata.get("recording_kind") == "trial" and writer.path is not None):
+            try:
+                archived = archive_trial_directory(writer.path)
+            except OSError as exc:
+                self._restart_pending = None
+                self.status_label.set("RESTART FAILED")
+                self.notice.set(f"Could not archive the current attempt; restart stopped: {exc}")
+                self.set_controls()
+                return
+            writer.path = archived
+        self._restart_pending = None
+        self._clear_rest()
+        self.state = "finished"
+        self._select_trial(pending["index"])
+        self.writer = None
+        self.trial_path = None
+        self.started = None
+        if archived is not None:
+            self.folder_label.set(f"Previous attempt archived at {archived}")
+        self.start_trial()
+
     def finish_trial(self, result, update_ui=True):
         if self.state == "countdown":
             self.state = "ready"
             self.calibrating = False
             self.range_calibration = None
             if update_ui:
-                self.rest_view.place_forget()
+                self._hide_preparation()
                 self.status_label.set("READY")
                 self.notice.set("Countdown cancelled. No trial was recorded.")
                 self.set_controls()
@@ -1372,6 +1791,11 @@ class StudyApplication:
                                                time.monotonic() - self.started, self.angle,
                                                self.count, "demo_skipped"))
         self.writer.finish(result, {"completed_cycles": self.count, "duration_sec": time.monotonic() - self.started,
+                                   "attempted_cycles": (self.counter.attempted_cycles if self.trial.axis else self.count),
+                                   "failed_cycle_count": len(self.counter.failed_cycles),
+                                   "failed_cycles": deepcopy(self.counter.failed_cycles),
+                                   "cycle_results": deepcopy(self.counter.cycle_results),
+                                   "neutral_reset_events": deepcopy(getattr(self, "_neutral_reset_events", [])),
                                    "object_release_count": len(getattr(self, "_force_release_events", [])),
                                    "object_release_events": deepcopy(getattr(self, "_force_release_events", [])),
                                    "force_release_event_drops": getattr(self, "_force_release_event_drops", 0),
@@ -1400,10 +1824,14 @@ class StudyApplication:
             return
         writer = self.writer
         self.state = "finished"
+        if getattr(self, "_restart_pending", None) is not None:
+            self._complete_trial_restart()
+            return
         if self.calibrating:
             accepted = (writer.result == "calibration_completed" and not writer.error and not writer.overflows)
             if accepted:
                 self.calibrations[self.calibration_key()] = deepcopy(writer.metadata["rotation_calibration"])
+                getattr(self, "_target_overrides", {}).pop(self.calibration_key(), None)
             self._select_trial(self.index)
             if accepted:
                 calibration = self.current_calibration()
@@ -1420,8 +1848,8 @@ class StudyApplication:
                 error = writer.error or writer.metadata.get("calibration_error") or "Angle test cancelled or incomplete."
                 self.notice.set(f"{error} Hold at neutral and start the angle test again.")
             return
-        incomplete = [f for f in FINGERS if writer.counts[f] == 0]
-        incomplete_raw = [f for f in FINGERS if writer.raw_counts[f] == 0]
+        incomplete = [f for f in FINGERS if writer.counts[f] == 0 and not self.sensor4_only]
+        incomplete_raw = [f for f in FINGERS if writer.raw_counts[f] == 0 and not self.sensor4_only]
         if writer.error:
             self.status_label.set("SAVE ERROR")
             self.notice.set("Recording error: " + writer.error)
@@ -1443,7 +1871,9 @@ class StudyApplication:
         else:
             self.status_label.set("COMPLETE · SAVED" if writer.result == "completed" else
                                   "DEMO SKIPPED · SAVED" if writer.result == "demo_skipped" else "STOPPED · SAVED")
-            self.notice.set(f"Saved {self.count}/20 cycles and {sum(writer.counts.values()):,} finger-force samples.")
+            self.notice.set(f"Saved {self.count}/20 cycles with live Sensor 4 tracking; ATI was disabled."
+                            if self.sensor4_only else
+                            f"Saved {self.count}/20 cycles and {sum(writer.counts.values()):,} finger-force samples.")
         self.set_controls()
         self.update_progress()
         self._begin_rest()
@@ -1554,6 +1984,7 @@ class StudyApplication:
         pose = snapshot["pose"]
         tracking = pose is not None and now - pose.arrival <= STALE_SEC
         self.pose_label.set("Sensor 4 · tracking" if tracking else "Sensor 4 · OFFLINE")
+        self._update_neutral_reset_control(snapshot, now)
         if snapshot.get("force_release_events_supported") is True:
             updates = self.bridge.drain_recording_updates()
             self.process_poses(updates["poses"], now, force_events=updates)
@@ -1574,7 +2005,8 @@ class StudyApplication:
             fresh = item["value"] is not None and now - item["arrival"] <= STALE_SEC
             values = item["value"][:3] if fresh else None
             self.charts[finger].draw(values)
-            self.chart_status[finger].set(f"Live  ·  {item['rate']:.0f} Hz" if fresh else "Offline · waiting for force")
+            self.chart_status[finger].set("N/A · Sensor 4 test · ATI disabled" if self.sensor4_only else
+                                          f"Live  ·  {item['rate']:.0f} Hz" if fresh else "Offline · waiting for force")
         self._refresh_waveforms(now, force_bias=snapshot.get("force_bias"))
         while not self.events.empty():
             level, message = self.events.get_nowait()
@@ -1590,7 +2022,8 @@ class StudyApplication:
             angle_label = "Target angle will be set by the angle test."
         elif self.trial.axis:
             calibration = self.current_calibration() if not self.trial.practice else None
-            target = calibration["target_deg"] if calibration else self.counter.target_deg
+            target = (self.calibrated_target() if calibration is not None and self.state in ("ready", "finished")
+                      else self.counter.target_deg)
             target_text = (self.target.get() if self.trial.practice and self.state in ("ready", "finished")
                            else f"{target:g}")
             angle_label = (f"Cycle angle  {angle_text}   ·   "
@@ -1600,8 +2033,8 @@ class StudyApplication:
         self.part_angle.configure(text=angle_label)
         self.axis_motion_label.set(self.axis_motion_text(tracking))
         self.part_axis_motion.configure(text=self.axis_motion_text(tracking, participant=True))
-        if not self.rest_screen_visible and self.state != "countdown":
-            self.mesh.set_pose(self.rotation, self.trial.axis, tracking=tracking if self.baseline is not None else True)
+        if not self.rest_screen_visible:
+            self._update_twin_pose(pose, now)
         self.update_progress()
         self.root.after(50, self.tick)
 
@@ -1628,6 +2061,7 @@ class StudyApplication:
         if self.closing:
             return
         self.closing = True
+        self._restart_pending = None
         self.close_reason = reason
         # main() owns the synchronous save/join, including exceptional exits.
         self.root.quit()
@@ -1637,6 +2071,7 @@ class StudyApplication:
         if self.shutdown_complete:
             return self.shutdown_ok
         self.closing = True
+        self._restart_pending = None
         reason = reason or self.close_reason
         errors = []
         report("stopping; finishing the active measurement…")
@@ -1686,7 +2121,8 @@ class StudyApplication:
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--demo", action="store_true", help="Simulate sensors; default output is User_Study_Data/demo/.")
+    parser.add_argument("--demo", action="store_true",
+                        help="Run simulated demo or configured live Sensor 4 test; output is under User_Study_Data/demo/.")
     parser.add_argument("--data-root", type=Path, default=None)
     parser.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "docs/user_study_docs/Trials_lookup.csv")
     parser.add_argument("--gui-config", "--rest-config", dest="rest_config", metavar="PATH", type=Path, default=GUI_CONFIG_FILE,

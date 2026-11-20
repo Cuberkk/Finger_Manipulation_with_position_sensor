@@ -335,14 +335,15 @@ class MeshView(tk.Canvas):
             points = np.stack((origin, origin + direction * radius * 1.17))
             coordinates = self._project(points, transform, center, scale)
             selected = axis == self._target_axis
+            state = tk.NORMAL if self._target_axis is None or selected else tk.HIDDEN
             self.coords(self._axis_lines[axis], *coordinates.ravel())
-            self.itemconfigure(self._axis_lines[axis], state=tk.NORMAL,
+            self.itemconfigure(self._axis_lines[axis], state=state,
                                fill=TARGET_COLOR if selected else AXIS_COLORS[axis],
                                width=(8 if selected else 4) * s,
                                arrowshape=tuple(value * s for value in ((18, 22, 8) if selected else (13, 17, 6))))
             label_point = self._project([origin + direction * radius * 1.32], transform, center, scale)[0]
             self.coords(self._axis_labels[axis], *label_point)
-            self.itemconfigure(self._axis_labels[axis], state=tk.NORMAL,
+            self.itemconfigure(self._axis_labels[axis], state=state,
                                fill=TARGET_COLOR if selected else AXIS_COLORS[axis])
         projected_origin = self._project([origin], transform, center, scale)[0]
         marker_radius = 3.5 * s

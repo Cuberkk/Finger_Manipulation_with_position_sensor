@@ -196,6 +196,24 @@ def archive_trial_directories(parent, reference):
         return tuple(moved)
 
 
+def archive_trial_directory(path: str | Path) -> Path:
+    """Archive one closed recording without moving other trial attempts."""
+    path = Path(path)
+    with _TRIAL_DIRECTORY_LOCK:
+        try:
+            if path.is_symlink() or not path.is_dir():
+                raise OSError("Expected an existing directory, not a symlink.")
+            if path.parent.name == "Archive":
+                return path
+            archive = path.parent / "Archive"
+            archive.mkdir(parents=True, exist_ok=True)
+            destination = _unused_archive_path(archive, path.name)
+            path.rename(destination)
+        except OSError as exc:
+            raise OSError(f"Could not archive trial directory {path}: {exc}") from exc
+        return destination
+
+
 def create_trial_directory(session, user, trial, when):
     """Archive the prior local trial and reserve its new recording directory."""
     validate_user(user)
@@ -456,7 +474,8 @@ class PreviewWriter:
 
 class ROSBridge:
     """Own ROS callbacks on a worker; Tk reads snapshots and bounded histories."""
-    def __init__(self, demo, events, pose_rate=60.0, *, release_force_threshold_n=0.5):
+    def __init__(self, demo, events, pose_rate=60.0, *, release_force_threshold_n=0.5,
+                 sensor4_only=False):
         if isinstance(release_force_threshold_n, bool) or not isinstance(release_force_threshold_n, Real):
             raise ValueError("Release force threshold must be a finite positive number in N.")
         try:
@@ -466,6 +485,7 @@ class ROSBridge:
         if not math.isfinite(release_force_threshold_n) or release_force_threshold_n <= 0:
             raise ValueError("Release force threshold must be a finite positive number in N.")
         self.demo = demo
+        self.sensor4_only = demo and sensor4_only
         self.events = events
         self.pose_rate = pose_rate
         self.stop_event = threading.Event()
@@ -577,6 +597,21 @@ class ROSBridge:
         """Detach poses and grip transitions at one callback-lock boundary."""
         with self.lock:
             updates = {"poses": list(self.poses), "events": list(self._force_release_events),
+                       "drops": self._force_release_drops}
+            self.poses.clear()
+            self._force_release_events.clear()
+            return updates
+
+    def drain_neutral_reset_updates(self):
+        """Capture a fresh neutral and pending updates at one recording boundary."""
+        with self.lock:
+            captured_at = time.monotonic()
+            if self.writer is None:
+                raise ValueError("No recording is active for a neutral reset.")
+            if self.pose is None or not 0 <= captured_at - self.pose.arrival <= STALE_SEC:
+                raise ValueError("Fresh Sensor 4 tracking is required to reset neutral.")
+            updates = {"pose": self.pose, "captured_at": captured_at,
+                       "poses": list(self.poses), "events": list(self._force_release_events),
                        "drops": self._force_release_drops}
             self.poses.clear()
             self._force_release_events.clear()
@@ -957,7 +992,7 @@ class ROSBridge:
             self.stop_event.wait(.01)
 
     def _run(self):
-        if self.demo:
+        if self.demo and not self.sensor4_only:
             self._run_demo()
             return
         context = node = executor = bias_client = None
@@ -970,8 +1005,6 @@ class ROSBridge:
             from rclpy.node import Node
             from rclpy.signals import SignalHandlerOptions
             from rclpy.time import Time
-            from std_msgs.msg import Float64MultiArray, String
-            from std_srvs.srv import Trigger
             external_shutdown = (ExternalShutdownException,)
             context = Context()
             # The main GUI owns SIGINT/SIGTERM so it can save the active trial
@@ -981,15 +1014,19 @@ class ROSBridge:
             executor = SingleThreadedExecutor(context=context)
             executor.add_node(node)
             subscriptions = []
-            for kind, topics in (("raw", RAW_TOPICS), ("force", FORCE_TOPICS)):
-                for finger, topic in topics.items():
-                    def receive(message, kind=kind, finger=finger):
-                        self.sample_force(kind, finger, message.data)
-                    subscriptions.append(node.create_subscription(Float64MultiArray, topic, receive, 1000))
-            subscriptions.append(node.create_subscription(
-                String, FORCE_BIAS_STATUS_TOPIC,
-                lambda message: self.sample_force_bias_status(message.data), 10))
-            bias_client = node.create_client(Trigger, FORCE_BIAS_SERVICE)
+            if not self.sensor4_only:
+                from std_msgs.msg import Float64MultiArray, String
+                from std_srvs.srv import Trigger
+
+                for kind, topics in (("raw", RAW_TOPICS), ("force", FORCE_TOPICS)):
+                    for finger, topic in topics.items():
+                        def receive(message, kind=kind, finger=finger):
+                            self.sample_force(kind, finger, message.data)
+                        subscriptions.append(node.create_subscription(Float64MultiArray, topic, receive, 1000))
+                subscriptions.append(node.create_subscription(
+                    String, FORCE_BIAS_STATUS_TOPIC,
+                    lambda message: self.sample_force_bias_status(message.data), 10))
+                bias_client = node.create_client(Trigger, FORCE_BIAS_SERVICE)
             buffer = tf2_ros.Buffer()
             listener = tf2_ros.TransformListener(buffer, node, spin_thread=False)
             last_stamp = None
@@ -1009,10 +1046,13 @@ class ROSBridge:
                     pass
 
             timer = node.create_timer(1.0 / self.pose_rate, receive_pose)
-            self.events.put(("info", "ROS connected. Waiting for sensor4 and finger-frame force streams."))
+            self.events.put(("info", "Sensor 4 test: waiting for live sensor4 TF; ATI is disabled."
+                             if self.sensor4_only else
+                             "ROS connected. Waiting for sensor4 and finger-frame force streams."))
             while not self.stop_event.is_set() and context.ok():
                 executor.spin_once(timeout_sec=.05)
-                self._poll_force_bias(bias_client, Trigger.Request)
+                if bias_client is not None:
+                    self._poll_force_bias(bias_client, Trigger.Request)
         except external_shutdown:
             # Context shutdown is a normal way for the executor to stop.
             pass
