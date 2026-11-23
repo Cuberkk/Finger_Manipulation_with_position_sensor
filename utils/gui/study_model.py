@@ -14,7 +14,7 @@ import numpy as np
 
 
 _TASKS = {"R": "roll", "P": "pitch", "Y": "yaw", "G": "finger_gating"}
-_AXES = {"roll": "x", "pitch": "y", "yaw": "z", "finger_gating": None}
+_AXES = {"roll": "x", "pitch": "y", "yaw": "z", "finger_gating": "z"}
 
 
 @dataclass(frozen=True)
@@ -27,8 +27,8 @@ class TrialSpec:
     practice: bool
 
     @property
-    def axis(self) -> str | None:
-        """Object-local task axis, moving with the object; gating is counted manually."""
+    def axis(self) -> str:
+        """Object-local task axis, moving with the object."""
         return _AXES[self.task]
 
     @property

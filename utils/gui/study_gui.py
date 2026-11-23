@@ -254,7 +254,7 @@ class StudyApplication:
 
     @property
     def count(self):
-        return self.counter.count if self.trial.axis else self.manual_count
+        return self.counter.count
 
     def _cycle_quality_metadata(self):
         return {
@@ -791,14 +791,16 @@ class StudyApplication:
         self.refresh_identity()
         self.part_trial.configure(text=f"Trial {self.trial.reference} / {self.total_trials}" if not self.trial.practice else f"Practice · {self.trial.reference}")
         self.part_task.configure(text=f"Trial Task: {self.trial.code}     ·     Task {task}")
-        axis = f"{TASK_NAMES[self.trial.task]}  /  Object {self.trial.axis.upper()} axis" if self.trial.axis else "Finger gaiting  /  Object Z axis  /  researcher counts"
+        axis = f"{TASK_NAMES[self.trial.task]}  /  Object {self.trial.axis.upper()} axis"
+        if self.trial.task == "finger_gating":
+            axis += "  /  automatic + manual counting"
         self.part_axis.configure(text=axis)
         self.part_axis_motion.configure(text=self.axis_motion_text(participant=True))
         self.mesh.set_diameter(self.trial.diameter_mm)
         self.mesh.set_pose(getattr(self, "_display_rotation", np.eye(3)), self.trial.axis or "z",
                            tracking=getattr(self, "_display_tracking", True))
         self.status_label.set("READY")
-        self.notice.set(self.mesh.error or ("Ready. Start to pick up the object, then hold at neutral when prompted." if self.trial.axis else "Gaiting: the researcher records each completed cycle with +1."))
+        self.notice.set(self.mesh.error or "Ready. Start to pick up the object, then hold at neutral when prompted.")
         self.update_progress()
         self.set_controls()
         self.part_instruction.configure(text=self.participant_instruction(time.monotonic(), tracking=True))
@@ -831,7 +833,8 @@ class StudyApplication:
                                    "Finish angle test" if self.calibrating else
                                    "Stop preview" if self.writer is not None and
                                    not getattr(self.writer, "recording_enabled", True) else "Stop & save")
-        self.manual_button.configure(state="normal" if self.state == "recording" and not self.trial.axis else "disabled")
+        self.manual_button.configure(state="normal" if self.state == "recording" and
+                                     self.trial.task == "finger_gating" and not self.calibrating else "disabled")
         self.next_button.configure(state="normal" if not busy and self.index < len(self.trials) - 1 else "disabled")
         self.previous_button.configure(state="normal" if not busy and self.index > 0 else "disabled")
         if getattr(self, "restart_button", None) is not None:
@@ -1329,7 +1332,8 @@ class StudyApplication:
                         "failed_cycles": [], "cycle_results": [],
                         "neutral_crossing": "linear_between_adjacent_valid_samples",
                         "count_mode": ("rotation_range" if self.calibrating else
-                                       "automatic_rotation" if self.trial.axis else "manual_gaiting"),
+                                       "automatic_rotation_with_manual" if self.trial.task == "finger_gating" else
+                                       "automatic_rotation"),
                         "mesh": str(mesh_asset_path(self.args.mesh_dir, self.trial.diameter_mm)),
                         "mesh_origin_xyz": [0.0, 0.0, 0.0], "mesh_coordinate_unit": "mm",
                         "mesh_to_sensor4_matrix": self.alignment.tolist(),
@@ -1602,7 +1606,7 @@ class StudyApplication:
             limits = self.range_calibration
             text += f"   ·   Max +{limits.positive_max_deg:.1f}° / −{limits.negative_max_deg:.1f}°"
         elif self.sensor4_only:
-            attempts = self.counter.attempted_cycles
+            attempts = self.counter.attempted_cycles + self.manual_count
             rate = f"{self.count / attempts:.1%}" if attempts else "—"
             text += (f"\nSuccessful: {self.count} · Failed: {len(self.counter.failed_cycles)} · "
                      f"Attempts: {attempts} · Success rate: {rate}"
@@ -1621,14 +1625,17 @@ class StudyApplication:
             self.ft_stale[finger] = stale
 
     def manual_cycle(self):
-        if self.state != "recording" or self.trial.axis:
+        if self.state != "recording" or self.trial.task != "finger_gating" or self.calibrating:
             return
         pose = self.bridge.snapshot()["pose"]
         if pose is None or time.monotonic() - pose.arrival > STALE_SEC:
             self.notice.set("Tracking unavailable. Restore sensor 4 before counting a cycle.")
             return
-        self.manual_count = min(20, self.manual_count + 1)
-        self.writer.add("progress", None, (pose.source_timestamp, time.monotonic() - self.started, "", self.count, "manual_cycle"))
+        self.manual_count += 1
+        self.counter.count = min(20, self.counter.count + 1)
+        # A manually credited cycle must not also finish the pending automatic sequence.
+        self.counter.reset_partial()
+        self.writer.add("progress", None, (pose.source_timestamp, time.monotonic() - self.started, self.angle, self.count, "manual_cycle"))
         if self.count == 20:
             self.finish_trial("completed")
         self.update_progress()
@@ -1791,7 +1798,8 @@ class StudyApplication:
                                                time.monotonic() - self.started, self.angle,
                                                self.count, "demo_skipped"))
         self.writer.finish(result, {"completed_cycles": self.count, "duration_sec": time.monotonic() - self.started,
-                                   "attempted_cycles": (self.counter.attempted_cycles if self.trial.axis else self.count),
+                                   "attempted_cycles": self.counter.attempted_cycles + self.manual_count,
+                                   "manual_cycles": self.manual_count,
                                    "failed_cycle_count": len(self.counter.failed_cycles),
                                    "failed_cycles": deepcopy(self.counter.failed_cycles),
                                    "cycle_results": deepcopy(self.counter.cycle_results),
